@@ -69,6 +69,9 @@ System Commands:
 Compose Commands:
   compose     Run multi-container apps (proxied to docker-compose)
 
+Utility Commands:
+  completion  Output shell completion script (bash|zsh)
+
 Socket Commands:
   socket      Manage the Docker API server (start/stop/status) — see docs for Testcontainers setup
 

@@ -12,8 +12,29 @@ export const networks = {
   },
   async create({ body, res }) {
     if (!body?.Name) return apiError(res, 400, "Name required");
-    const args = ["network", "create", body.Name];
-    if (body.Driver && body.Driver !== "bridge") args.push("--driver", body.Driver);
+
+    const args = ["network", "create"];
+
+    // Docker compose relies on network labels such as:
+    // - com.docker.compose.project
+    // - com.docker.compose.network
+    // Preserve them so compose can detect ownership correctly.
+    for (const [k, v] of Object.entries(body.Labels ?? {})) {
+      args.push("--label", `${k}=${v}`);
+    }
+
+    if (body.Internal === true) args.push("--internal");
+
+    // Map network options to apple/container's --option key=value
+    for (const [k, v] of Object.entries(body.Options ?? {})) {
+      args.push("--option", `${k}=${v}`);
+    }
+
+    // Driver is not directly compatible with apple/container plugin naming.
+    // Compose commonly sends "bridge"; ignore driver hints for compatibility.
+
+    args.push(body.Name);
+
     const { stdout, stderr, exitCode } = await run(args);
     if (exitCode !== 0) return apiError(res, 500, stderr);
     json(res, 201, { Id: stdout.trim() || body.Name, Warning: "" });
@@ -47,7 +68,7 @@ function toDockerNetwork(n) {
     Attachable: false,
     Ingress: false,
     Containers: {},
-    Options: {},
+    Options: config.options ?? {},
     Labels: config.labels ?? {},
     Status: {
       Containers: {},

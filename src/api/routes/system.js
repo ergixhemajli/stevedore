@@ -7,10 +7,11 @@
  */
 
 import { run, json, apiError } from "../run.js";
-
-// Keep these Docker-like to satisfy docker-java / Testcontainers version checks.
-const DOCKER_ENGINE_VERSION = "25.0.0";
-const DOCKER_API_VERSION = "1.44";
+import {
+  DOCKER_ENGINE_VERSION,
+  DOCKER_API_MIN_VERSION,
+  DOCKER_API_MAX_VERSION,
+} from "../versioning.js";
 
 export const system = {
 
@@ -18,15 +19,13 @@ export const system = {
    * GET /_ping  — Testcontainers hits this first to verify the socket works.
    * Must return exactly "OK" with status 200.
    */
-  async ping({ req, res }) {
-    // Extract API version from request URL
-    const apiVersion = (req.url ?? "").match(/\/v(\d+\.\d+)/)?.[1] ?? DOCKER_API_VERSION;
+  async ping({ apiVersion, res }) {
     res.writeHead(200, {
       "Content-Type": "text/plain",
       "Docker-Experimental": "false",
       "Ostype": "linux",
       "Server": "stevedore/0.1.0",
-      "Api-Version": apiVersion,
+      "Api-Version": apiVersion ?? DOCKER_API_MAX_VERSION,
     });
     res.end("OK");
   },
@@ -37,12 +36,10 @@ export const system = {
   async version({ res }) {
     const { stdout } = await run(["system", "version"]);
     // Parse whatever apple/container returns and wrap it in Docker's shape
-    // Use the version from the request URL if available
-    const apiVersion = DOCKER_API_VERSION;
     json(res, 200, {
       Version: DOCKER_ENGINE_VERSION,
-      ApiVersion: apiVersion,
-      MinAPIVersion: "1.24",
+      ApiVersion: DOCKER_API_MAX_VERSION,
+      MinAPIVersion: DOCKER_API_MIN_VERSION,
       GitCommit: "",
       GoVersion: "",
       Os: "linux",

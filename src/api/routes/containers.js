@@ -236,7 +236,18 @@ function buildRunArgs(config, name) {
     for (const hb of hostBindings ?? []) {
       const hostPort = hb.HostPort || cPort;
       const hostIp = hb.HostIp || "";
-      const bind = hostIp ? `${hostIp}:${hostPort}:${cPort}` : `${hostPort}:${cPort}`;
+
+      // apple/container currently behaves inconsistently with loopback-only
+      // publish bindings coming from Docker API (e.g. 127.0.0.1:10101:5432),
+      // where the port can appear open but not forward traffic.
+      // For compatibility, treat loopback HostIp as unspecified.
+      const normalizedHostIp = ["127.0.0.1", "localhost", "::1"].includes(hostIp)
+        ? ""
+        : hostIp;
+
+      const bind = normalizedHostIp
+        ? `${normalizedHostIp}:${hostPort}:${cPort}`
+        : `${hostPort}:${cPort}`;
       args.push("--publish", bind);
     }
   }

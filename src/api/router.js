@@ -22,6 +22,12 @@ import { images }     from "./routes/images.js";
 import { networks }   from "./routes/networks.js";
 import { volumes }    from "./routes/volumes.js";
 import { system }     from "./routes/system.js";
+import {
+  DOCKER_API_MIN_VERSION,
+  DOCKER_API_MAX_VERSION,
+  extractApiVersionFromPath,
+  compareVersion,
+} from "./versioning.js";
 
 // ---------------------------------------------------------------------------
 // Route table
@@ -99,8 +105,28 @@ function r(method, path, paramNames, handler) {
 export async function router(req, res, body) {
   // Strip API version prefix: /v1.41/containers/json → /containers/json
   const rawPath = req.url?.split("?")[0] ?? "/";
+  const requestedApiVersion = extractApiVersionFromPath(rawPath);
+
+  if (requestedApiVersion) {
+    if (compareVersion(requestedApiVersion, DOCKER_API_MAX_VERSION) > 0) {
+      return versionError(
+        res,
+        400,
+        `client version ${requestedApiVersion} is too new. Maximum supported API version is ${DOCKER_API_MAX_VERSION}`
+      );
+    }
+    if (compareVersion(requestedApiVersion, DOCKER_API_MIN_VERSION) < 0) {
+      return versionError(
+        res,
+        400,
+        `client version ${requestedApiVersion} is too old. Minimum supported API version is ${DOCKER_API_MIN_VERSION}`
+      );
+    }
+  }
+
   const normalised = rawPath.replace(/^\/v\d+\.\d+/, "");
   const query = parseQuery(req.url);
+  const apiVersion = requestedApiVersion ?? DOCKER_API_MAX_VERSION;
 
   for (const route of ROUTES) {
     if (route.method !== req.method) continue;
@@ -114,7 +140,7 @@ export async function router(req, res, body) {
     });
 
     const bodyObj = body ? tryJSON(body) : null;
-    await route.handler({ req, res, params, query, body: bodyObj, rawBody: body });
+    await route.handler({ req, res, params, query, body: bodyObj, rawBody: body, apiVersion });
     return;
   }
 
@@ -139,4 +165,9 @@ function decodePathParam(value) {
   } catch {
     return value;
   }
+}
+
+function versionError(res, status, message) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ message }));
 }

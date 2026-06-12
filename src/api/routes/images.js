@@ -16,15 +16,58 @@ export const images = {
     json(res, 200, parsed.map(toDockerImage));
   },
 
-  async pull({ query, res }) {
+  async pull({ query, req, res }) {
     const ref = query.fromImage + (query.tag ? `:${query.tag}` : "");
     if (!ref || ref === "undefined") return apiError(res, 400, "fromImage query parameter required");
+
     res.writeHead(200, { "Content-Type": "application/json" });
+
+    // Send an initial progress event so docker-java/Testcontainers immediately
+    // receives a PullResponseItem and starts its watchdog timer from activity.
+    res.write(JSON.stringify({ status: `Pulling image ${ref}` }) + "\n");
+
     const child = spawn(CONTAINER_BIN, ["image", "pull", ref], { stdio: ["ignore", "pipe", "pipe"] });
-    child.stdout.on("data", (d) => res.write(JSON.stringify({ status: d.toString().trim() }) + "\n"));
-    child.stderr.on("data", (d) => res.write(JSON.stringify({ status: d.toString().trim() }) + "\n"));
+
+    const emitLines = (buf) => {
+      const text = buf.toString();
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        res.write(JSON.stringify({ status: trimmed }) + "\n");
+      }
+    };
+
+    child.stdout.on("data", emitLines);
+    child.stderr.on("data", emitLines);
+
+    // Some pulls are silent for >30s with apple/container. Emit heartbeat
+    // progress frames so Testcontainers pull watchdog sees forward activity.
+    const heartbeat = setInterval(() => {
+      if (res.writableEnded || child.killed) return;
+      res.write(JSON.stringify({
+        status: `Pulling image ${ref}`,
+        progressDetail: { current: 1, total: 1 },
+      }) + "\n");
+    }, 5000);
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      child.kill();
+    });
+
     child.on("exit", (code) => {
-      if (code !== 0) res.write(JSON.stringify({ error: `pull failed with exit code ${code}` }) + "\n");
+      clearInterval(heartbeat);
+      if (code !== 0) {
+        res.write(JSON.stringify({ error: `pull failed with exit code ${code}` }) + "\n");
+      } else {
+        res.write(JSON.stringify({ status: `Pulled image ${ref}` }) + "\n");
+      }
+      res.end();
+    });
+
+    child.on("error", (err) => {
+      clearInterval(heartbeat);
+      res.write(JSON.stringify({ error: err.message }) + "\n");
       res.end();
     });
   },

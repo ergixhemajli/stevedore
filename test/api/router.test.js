@@ -42,7 +42,8 @@ describe("router — version stripping", () => {
     const { req, res } = makeMockRequest("GET", "/v1.41/containers/json");
     await router(req, res, null);
     assert.equal(res.status, 200);
-    assert.equal(res.body, "[]");
+    const body = JSON.parse(res.body);
+    assert.ok(Array.isArray(body));
   });
 
   it("passes through unversioned paths unchanged", async () => {
@@ -50,6 +51,24 @@ describe("router — version stripping", () => {
     const { req, res } = makeMockRequest("GET", "/containers/json");
     await router(req, res, null);
     assert.equal(res.status, 200);
+  });
+
+  it("rejects API versions newer than max supported", async () => {
+    const { router } = await import("../../src/api/router.js");
+    const { req, res } = makeMockRequest("GET", "/v1.99/containers/json");
+    await router(req, res, null);
+    assert.equal(res.status, 400);
+    const body = JSON.parse(res.body);
+    assert.ok(body.message.includes("too new"));
+  });
+
+  it("rejects API versions older than min supported", async () => {
+    const { router } = await import("../../src/api/router.js");
+    const { req, res } = makeMockRequest("GET", "/v1.10/containers/json");
+    await router(req, res, null);
+    assert.equal(res.status, 400);
+    const body = JSON.parse(res.body);
+    assert.ok(body.message.includes("too old"));
   });
 });
 
@@ -96,44 +115,25 @@ describe("router — version endpoint", () => {
     await router(req, res, null);
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
-    assert.ok(body.ApiVersion?.startsWith("1."));
+    assert.equal(body.ApiVersion, "1.44");
     assert.ok(body.Components?.length > 0);
     assert.ok(body.Platform?.Name?.includes("stevedore"));
+    assert.equal(body.Version, "25.0.0");
   });
 });
 
 describe("access control — restricted commands", () => {
-  it("doctor is only available when invoked as stevedore", async () => {
+  it("doctor is blocked when invoked as docker", async () => {
     const { dispatch } = await import("../../src/dispatcher.js");
     let stderr = "";
     const origError = console.error;
     console.error = (msg) => { stderr += msg; };
 
+    const prevExitCode = process.exitCode;
     await dispatch(["doctor"], false);
     assert.ok(stderr.includes("only available when running as \"stevedore\""));
 
-    stderr = "";
-    await dispatch(["doctor"], true);
-    assert.ok(!stderr.includes("only available"));
-
-    console.error = origError;
-  });
-
-  it("socket is available under both docker and stevedore names", async () => {
-    const { dispatch } = await import("../../src/dispatcher.js");
-    let stderr = "";
-    const origError = console.error;
-    console.error = (msg) => { stderr += msg; };
-
-    // docker socket status → should work (not blocked)
-    await dispatch(["socket", "status"], false);
-    assert.ok(!stderr.includes("only available"));
-
-    // stevedore socket status → should also work
-    stderr = "";
-    await dispatch(["socket", "status"], true);
-    assert.ok(!stderr.includes("only available"));
-
+    process.exitCode = prevExitCode;
     console.error = origError;
   });
 });

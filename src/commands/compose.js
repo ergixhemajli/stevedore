@@ -21,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -68,19 +68,62 @@ export default async function compose(args) {
   // (unless explicitly set by the user in args)
   delete env.COMPOSE_FILE;
 
-  try {
-    const result = execSync(
-      `"${composeBin}" ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`,
-      {
-        stdio: "inherit",
-        env,
-      }
-    );
-    return result;
-  } catch (err) {
-    // docker-compose exits with non-zero on errors — just propagate it
-    process.exit(err.status || 1);
+  // If compose is provided by the Docker CLI plugin, invoke as: docker compose ...
+  const composeArgs = path.basename(composeBin) === "docker"
+    ? ["compose", ...args]
+    : args;
+
+  const { code, combinedOutput } = await runStreaming(composeBin, composeArgs, env);
+
+  if (code !== 0 && looksLikeComposePanic(combinedOutput)) {
+    console.error("\nstevedore: docker compose crashed with an internal panic (upstream compose bug).");
+    console.error("This usually happens during reconcile/recreate with orphan or previously-created containers.");
+    console.error("\nTry:\n  docker compose down --remove-orphans\n  docker compose up -d\n");
+    console.error("If needed, remove stale containers manually:\n  docker ps -a\n  docker rm -f <container-id>\n");
   }
+
+  if (code !== 0) {
+    process.exit(code);
+  }
+}
+
+function runStreaming(bin, args, env) {
+  return new Promise((resolve) => {
+    const child = spawn(bin, args, {
+      env,
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+
+    let combinedOutput = "";
+
+    child.stdout.on("data", (d) => {
+      const s = d.toString();
+      combinedOutput += s;
+      process.stdout.write(d);
+    });
+
+    child.stderr.on("data", (d) => {
+      const s = d.toString();
+      combinedOutput += s;
+      process.stderr.write(d);
+    });
+
+    child.on("close", (code) => {
+      resolve({ code: code ?? 1, combinedOutput });
+    });
+
+    child.on("error", (err) => {
+      process.stderr.write(`stevedore: failed to run compose: ${err.message}\n`);
+      resolve({ code: 1, combinedOutput: combinedOutput + "\n" + err.message });
+    });
+  });
+}
+
+function looksLikeComposePanic(output) {
+  return (
+    output.includes("panic: runtime error") &&
+    output.includes("pkg/compose/convergence.go")
+  );
 }
 
 // ---------------------------------------------------------------------------

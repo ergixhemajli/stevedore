@@ -31,20 +31,39 @@ npm install -g stevedore
 npx stevedore run ubuntu:latest echo hello
 ```
 
-### 3. Add to your shell
+### 3. Enable shell completion (recommended)
 
-Add this to your `~/.zshrc` (or `~/.bashrc`):
+Stevedore can generate completion scripts so `docker <TAB>` works for commands and common names.
+
+#### zsh
 
 ```bash
-# Stevedore: docker compatibility layer for apple/container
-# Only needed if you use Testcontainers:
-# export DOCKER_HOST=unix://$HOME/.stevedore/docker.sock
-# export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.stevedore/docker.sock
+mkdir -p ~/.stevedore
+docker completion zsh > ~/.stevedore/_docker
+fpath=(~/.stevedore $fpath)
+autoload -Uz compinit && compinit
+```
+
+#### bash
+
+```bash
+mkdir -p ~/.stevedore
+docker completion bash > ~/.stevedore/completion.bash
+source ~/.stevedore/completion.bash
+```
+
+### 4. Add optional Testcontainers env vars
+
+Add this to your `~/.zshrc` (or `~/.bashrc`) if you use Testcontainers:
+
+```bash
+export DOCKER_HOST=unix://$HOME/.stevedore/docker.sock
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.stevedore/docker.sock
 ```
 
 Then reload: `source ~/.zshrc`
 
-### 4. Use it as `docker`
+### 5. Use it as `docker`
 
 Just start using it:
 

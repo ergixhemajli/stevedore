@@ -84,6 +84,7 @@ const COMMAND_MAP = {
 
   // ── compose (project orchestration) ──────────────────────────────────────
   compose: () => import("./commands/compose.js"),
+  completion: () => import("./commands/completion.js"),
 
   // ── system / info ────────────────────────────────────────────────────────
   info:    () => import("./commands/info.js"),
