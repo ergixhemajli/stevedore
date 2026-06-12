@@ -1,0 +1,57 @@
+{
+  "user": {
+    "name": "Ergi Xhemajli",
+    "email": "ergix@uio.no",
+    "preferences": {
+      "autonomous_troubleshooting": "if it doesnt run, fix the issue — wants autonomous fixes, not questions",
+      "push_restrictions": "i dont want you to push anything — never push to remote without explicit permission",
+      "architecture_style": "wants cleaner architecture for open-source readiness (modular, contributor-friendly)",
+      "git_preference": "prefers to track only specific files in git, not entire directories",
+      "git_value": "values git history for configuration/scripts"
+    },
+    "workloads": {
+      "local_llm_inference": true,
+      "hardware_sensitivity": "runs local LLM inference, needs extra hardware — avoids reserved resources (no Colima VM)",
+      "colima_replacement_goal": "wants to replace Colima with apple/container + stevedore to avoid hardware reservation"
+    }
+  },
+  "project": {
+    "name": "stevedore",
+    "tech_stack": "Node.js, MIT licensed, modular command handlers via dispatcher pattern",
+    "purpose": "docker CLI shim → apple/container CLI (runs containers on Apple Silicon with zero overhead, no persistent VM)",
+    "architecture": "dispatcher routes subcommands to src/commands/*.js handlers; handlers use exec() to spawn container binary",
+    "version": "0.1.0",
+    "key_constraints": {
+      "testcontainers_java": "cannot use stevedore directly — Testcontainers Java needs Docker Engine API socket, not CLI",
+      "apple_container_limitation": "apple/container does not expose a Docker-compatible API socket for docker-java to talk to",
+      "mvp_approach": "build a Docker API shim/emulator that translates Engine API calls to apple/container CLI commands"
+    },
+    "learned": {
+      "apple_container_is_cli_only": "apple/container has no Docker Engine API socket — API clients like Testcontainers Java require a proxy/shim layer, not just a CLI shim",
+      "stevedore_dispatcher_pattern": "src/commands/*.js exports default async function(args); dispatcher routes subcommands; handlers call exec() which spawns container binary via child_process.spawn()",
+      "socktainer_pattern": "Swift + Vapor server listening on Unix socket, implements Docker API v1.51, uses per-endpoint RouteCollection structs, versioned regex routes for API compatibility"
+    },
+    "conventions": {
+      "command_surface": "User-facing workflow should stay as docker commands (`docker ...`) routed through this codebase; `stevedore` is for diagnostics/meta commands like `stevedore doctor`.",
+      "no_docker_desktop_goal": "Stevedore is intended to avoid Docker Desktop/Colima by translating docker CLI semantics to apple/container."
+    },
+    "failure_lessons": {
+      "correction_docker_vs_stevedore": "Assistant initially changed behavior to wrap docker directly or shifted command surfaces inconsistently. User clarified repeatedly: normal commands must be invoked as docker commands, translated to apple/container, with stevedore reserved for doctor/meta.",
+      "tool_quirk_container_path": "Hardcoding /usr/local/bin/container failed on Apple Silicon (ENOENT). Use /opt/homebrew/bin/container fallback or resolve via `command -v container`.",
+      "insight_testcontainers": "Testcontainers requires a Docker Engine API-compatible Unix socket; CLI command translation alone is insufficient. A socket/API shim is required."
+    },
+    "reference_project": {
+      "name": "swift-test-containers (Mongey)",
+      "url": "https://github.com/Mongey/swift-test-containers",
+      "relevance": "has AppleContainerClient that wraps container CLI — useful reference for building the API shim layer",
+      "key_patterns": "ContainerRequest builder, ContainerRuntime protocol, scoped lifecycle with cleanup, ContainerState, ContainerInspection, ContainerListItem, parseAppleInspect, toContainerInspection mapping"
+    },
+    "reference_project_2": {
+      "name": "socktainer",
+      "url": "https://github.com/socktainer/socktainer",
+      "relevance": "Docker Engine API shim for apple/container — the actual pattern to follow for the API socket layer",
+      "tech_stack": "Swift + Vapor + NIO, implements Docker API v1.51",
+      "key_patterns": "Unix socket at ~/.socktainer/container.sock, Vapor route collections per endpoint, versioned regex routes, health check ping route, container create/start/inspect routes, DockerConnectionState for I/O concurrency, events streaming, info route mapping, BuildKit/image/volume/network/registry service clients, CLI bootstrap with --check-compatibility flag"
+    }
+  }
+}

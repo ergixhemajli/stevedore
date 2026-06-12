@@ -31,27 +31,28 @@ npm install -g stevedore
 npx stevedore run ubuntu:latest echo hello
 ```
 
-### 3. Use it as `docker`
+### 3. Add to your shell
 
-After installing globally, stevedore is installed as `docker` in your PATH. Just start using it:
+Add this to your `~/.zshrc` (or `~/.bashrc`):
+
+```bash
+# Stevedore: docker compatibility layer for apple/container
+# Only needed if you use Testcontainers:
+# export DOCKER_HOST=unix://$HOME/.stevedore/docker.sock
+# export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.stevedore/docker.sock
+```
+
+Then reload: `source ~/.zshrc`
+
+### 4. Use it as `docker`
+
+Just start using it:
 
 ```bash
 docker ps
 docker version
 docker info
 ```
-
-Run `docker doctor` to verify everything is working:
-
-```bash
-docker doctor
-```
-
-## Requirements
-
-- macOS on Apple Silicon
-- apple/container 1.0.0+
-- Node.js 20+
 
 ## Usage
 
@@ -72,7 +73,91 @@ Stevedore maps the full `docker` CLI to `apple/container`. Most commands work di
 
 Some docker flags are automatically translated (`--net` → `--network`) and unsupported ones are silently dropped with a warning, so your existing scripts keep working.
 
-## Not yet supported
+## Compose Support
+
+Stevedore proxies `docker compose` to the official docker-compose (v2) binary, automatically pointing it at the stevedore socket.
+
+### 1. Install docker-compose
+
+```bash
+brew install docker-compose
+```
+
+### 2. Use it normally
+
+```bash
+cd my-project
+docker compose up -d
+docker compose ps
+docker compose logs -f
+docker compose down
+```
+
+The socket server starts automatically when you run any compose command.
+
+> **Note**: Compose support quality depends on how complete the socket server's API translation is. Issues with `depends_on`, `healthcheck`, etc. can be fixed as individual endpoints.
+
+## Testcontainers Support
+
+Stevedore includes a Docker API shim that exposes a Docker Engine-compatible socket, enabling Java Testcontainers to work with apple/container.
+
+### 1. Start the API server
+
+```bash
+docker socket start
+```
+
+This creates a Unix socket at `~/.stevedore/docker.sock`.
+
+### 2. Configure Testcontainers
+
+Set the Docker host environment variable:
+
+```bash
+export DOCKER_HOST=unix://$HOME/.stevedore/docker.sock
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.stevedore/docker.sock
+```
+
+Or in your `testcontainers.properties` file:
+
+```properties
+docker.host=unix:///Users/<you>/.stevedore/docker.sock
+```
+
+Or as a Java system property:
+
+```
+-Dtestcontainers.dockersocket=/Users/<you>/.stevedore/docker.sock
+```
+
+### 3. Run your tests
+
+```bash
+mvn test
+# or
+gradle test
+```
+
+### Stop the server
+
+```bash
+docker socket stop
+```
+
+Check status:
+
+```bash
+docker socket status
+```
+
+## Commands
+
+- `docker <command>` — pass through to apple/container (ps, run, build, pull, exec, etc.)
+- `docker compose <command>` — run multi-container apps (proxied to docker-compose)
+- `docker socket start/stop/status` — manage the Docker API server for Testcontainers
+- `stevedore doctor` — environment diagnostics (only available via `stevedore` name)
+
+### Not yet supported
 
 - `docker network connect` / `disconnect`
 - `docker commit`, `docker diff`

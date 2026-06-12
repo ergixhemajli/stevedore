@@ -66,9 +66,20 @@ System Commands:
   system      Manage containers (mapped to container system)
   version     Show the Docker version information
 
+Compose Commands:
+  compose     Run multi-container apps (proxied to docker-compose)
+
+Socket Commands:
+  socket      Manage the Docker API server (start/stop/status) — see docs for Testcontainers setup
+
 Run 'stevedore COMMAND --help' for more information on a command.
 
 Note: stevedore is a compatibility layer. Some Docker flags are not supported
 by apple/container and will be ignored with a warning.
+
+For Testcontainers support, start the API server with:
+  stevedore socket start
+
+See https://github.com/stevedore for setup instructions.
 `);
 }

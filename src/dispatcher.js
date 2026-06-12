@@ -13,6 +13,10 @@
  *   1. Create src/commands/<name>.js
  *   2. Add an entry to COMMAND_MAP below
  *   3. Add tests in test/commands/<name>.test.js
+ *
+ * Access control:
+ *   - doctor, socket: only available when invoked as "stevedore" (not "docker")
+ *   - all other commands: available under both names
  */
 
 import { exec } from "./utils/exec.js";
@@ -53,6 +57,7 @@ const COMMAND_MAP = {
   export:  () => import("./commands/export.js"),
   commit:  () => import("./commands/commit.js"),
   doctor:  () => import("./commands/doctor.js"),
+  socket:  () => import("./commands/socket.js"),
 
   // ── image management ─────────────────────────────────────────────────────
   build:   () => import("./commands/build.js"),
@@ -77,6 +82,9 @@ const COMMAND_MAP = {
   login:   () => import("./commands/login.js"),
   logout:  () => import("./commands/logout.js"),
 
+  // ── compose (project orchestration) ──────────────────────────────────────
+  compose: () => import("./commands/compose.js"),
+
   // ── system / info ────────────────────────────────────────────────────────
   info:    () => import("./commands/info.js"),
   version: () => import("./commands/version.js"),
@@ -87,7 +95,7 @@ const COMMAND_MAP = {
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
-export async function dispatch(argv) {
+export async function dispatch(argv, invokedAsStevedore = false) {
   const [subcommand, ...rest] = argv;
 
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
@@ -98,6 +106,17 @@ export async function dispatch(argv) {
   if (subcommand === "--version" || subcommand === "-v") {
     const { default: handler } = await import("./commands/version.js");
     return handler([]);
+  }
+
+  // Restricted commands: only available when invoked as "stevedore"
+  const restricted = new Set(["doctor"]);
+  if (restricted.has(subcommand) && !invokedAsStevedore) {
+    console.error(
+      `stevedore: "stevedore ${subcommand}" is only available when running as "stevedore", not as "docker".\n` +
+      `  Run "stevedore ${subcommand}" directly.`
+    );
+    process.exitCode = 1;
+    return;
   }
 
   const loader = COMMAND_MAP[subcommand];
