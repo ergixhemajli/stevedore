@@ -1,0 +1,22 @@
+{
+  "name": "stevedore",
+  "version": "0.1.0",
+  "description": "A docker-compatible CLI wrapper around apple/container for macOS (Apple Silicon)",
+  "keywords": ["docker", "apple-container", "macos", "apple-silicon", "containers"],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "docker": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test test/**/*.test.js",
+    "lint": "eslint src/ test/",
+    "dev": "node src/cli.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  }
+}
