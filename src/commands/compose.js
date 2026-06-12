@@ -120,10 +120,10 @@ function runStreaming(bin, args, env) {
 }
 
 function looksLikeComposePanic(output) {
-  return (
-    output.includes("panic: runtime error") &&
-    output.includes("pkg/compose/convergence.go")
-  );
+  // Detect Go panics from docker-compose (any upstream compose bug).
+  // Matches "panic: ..." at line start — distinguishes from normal
+  // error messages that might mention the word "panic" elsewhere.
+  return /^panic:/m.test(output);
 }
 
 // ---------------------------------------------------------------------------

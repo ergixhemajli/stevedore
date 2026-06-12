@@ -18,6 +18,7 @@
 
 import { run, runJSON, json, apiError } from "../run.js";
 import { spawn } from "node:child_process";
+import net from "node:net";
 import { CONTAINER_BIN } from "../../utils/exec.js";
 
 export const containers = {
@@ -39,10 +40,19 @@ export const containers = {
   async create({ query, body, res }) {
     if (!body?.Image) return apiError(res, 400, "Image is required");
 
-    const args = buildRunArgs(body, query.name);
+    const args = await buildRunArgs(body, query.name);
 
-    // Run detached so the API call returns immediately with the container ID
-    // apple/container prints the container ID to stdout on creation
+    // Pass platform from Docker API body (e.g. "linux/amd64") so the correct
+    // architecture variant of the image is used. Without this, ryuk gets pulled
+    // as amd64 on Apple Silicon and runs under emulation, causing timeouts and
+    // broken pipe failures when Testcontainers tries to connect to it.
+    if (body.Platform) args.push("--platform", body.Platform);
+
+    // Use 'container create' (not 'run') so the container is NOT started yet.
+    // This gives Testcontainers time to configure its resource reaper (Ryuk)
+    // before the container begins executing.
+    args[0] = "create"; // replace "run" with "create"
+    args.splice(1, 1);  // remove "--detach" — create has no detach flag
     const { stdout, stderr, exitCode } = await run(args);
     if (exitCode !== 0) return apiError(res, 500, stderr || stdout);
 
@@ -221,7 +231,7 @@ function frameLog(stream, chunk) {
 // ---------------------------------------------------------------------------
 // Flag builder: Docker ContainerConfig → container run args
 // ---------------------------------------------------------------------------
-function buildRunArgs(config, name) {
+async function buildRunArgs(config, name) {
   const args = ["run", "--detach"];
 
   if (name) args.push("--name", name);
@@ -234,8 +244,15 @@ function buildRunArgs(config, name) {
   for (const [containerPort, hostBindings] of Object.entries(bindings)) {
     const cPort = containerPort.split("/")[0];
     for (const hb of hostBindings ?? []) {
-      const hostPort = hb.HostPort || cPort;
+      const hostPortRaw = hb.HostPort;
+      let hostPort = typeof hostPortRaw === "string" ? hostPortRaw.trim() : "";
       const hostIp = hb.HostIp || "";
+
+      // Docker semantics: empty HostPort means "assign a random host port".
+      // apple/container requires an explicit host port, so we allocate one.
+      if (!hostPort) {
+        hostPort = String(await findFreePort());
+      }
 
       // apple/container currently behaves inconsistently with loopback-only
       // publish bindings coming from Docker API (e.g. 127.0.0.1:10101:5432),
@@ -397,6 +414,24 @@ function toDockerInspect(c = {}) {
     },
     Mounts: [],
   };
+}
+
+async function findFreePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : null;
+      server.close((err) => {
+        if (err) return reject(err);
+        if (!port) return reject(new Error("failed to allocate free port"));
+        resolve(port);
+      });
+    });
+  });
 }
 
 function parseLines(stdout) {

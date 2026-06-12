@@ -26,7 +26,13 @@ export const images = {
     // receives a PullResponseItem and starts its watchdog timer from activity.
     res.write(JSON.stringify({ status: `Pulling image ${ref}` }) + "\n");
 
-    const child = spawn(CONTAINER_BIN, ["image", "pull", ref], { stdio: ["ignore", "pipe", "pipe"] });
+    const args = ["image", "pull", ref];
+    // Pass platform from Docker API query param (e.g. "linux/amd64") so the
+    // correct architecture variant is pulled — critical for Testcontainers Ryuk
+    // which must match the host architecture to avoid emulation failures.
+    if (query.platform) args.push("--platform", query.platform);
+
+    const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
 
     const emitLines = (buf) => {
       const text = buf.toString();
@@ -62,6 +68,10 @@ export const images = {
       } else {
         res.write(JSON.stringify({ status: `Pulled image ${ref}` }) + "\n");
       }
+      res.end();
+    }).on("error", (err) => {
+      clearInterval(heartbeat);
+      res.write(JSON.stringify({ error: err.message }) + "\n");
       res.end();
     });
 
