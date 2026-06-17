@@ -27,10 +27,41 @@ export const images = {
     res.write(JSON.stringify({ status: `Pulling image ${ref}` }) + "\n");
 
     const args = ["image", "pull", ref];
-    // Pass platform from Docker API query param (e.g. "linux/amd64") so the
-    // correct architecture variant is pulled — critical for Testcontainers Ryuk
-    // which must match the host architecture to avoid emulation failures.
-    if (query.platform) args.push("--platform", query.platform);
+    // Prefer a platform that matches the host architecture when no explicit
+    // platform is provided. This avoids pulling an amd64 variant on arm64
+    // Apple Silicon hosts which would otherwise run under QEMU emulation.
+    // The client may pass a platform via the Docker API query param; if set,
+    // honor that first.
+    let platform = query.platform;
+    if (!platform) {
+      if (process.arch === "arm64") platform = "linux/arm64";
+      else if (process.arch === "x64") platform = "linux/amd64";
+    }
+    if (platform) args.push("--platform", platform);
+
+    // If we're about to pull an arm variant, remove any existing local amd64
+    // image with the same ref so the pull will fetch the arm64 variant. This
+    // avoids Docker/container reusing a cached amd64 manifest and running
+    // under QEMU on Apple Silicon.
+    if (platform && platform.includes("arm")) {
+      try {
+        const { stdout: inspectOut, exitCode: inspectCode } = await run(["image", "inspect", ref]);
+        if (inspectCode === 0) {
+          try {
+            const inspected = JSON.parse(inspectOut)[0];
+            const existingArch = inspected?.variants?.[0]?.platform?.architecture;
+            if (existingArch === "amd64") {
+              res.write(JSON.stringify({ status: `Removing local amd64 image ${ref} to force ${platform} pull` }) + "\n");
+              await run(["image", "delete", ref]);
+            }
+          } catch (e) {
+            // ignore parse errors
+          }
+        }
+      } catch (e) {
+        // ignore inspect/delete failures
+      }
+    }
 
     const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
 

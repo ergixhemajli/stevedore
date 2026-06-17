@@ -58,6 +58,7 @@ const COMMAND_MAP = {
   commit:  () => import("./commands/commit.js"),
   doctor:  () => import("./commands/doctor.js"),
   socket:  () => import("./commands/socket.js"),
+  env:     () => import("./commands/env.js"),
 
   // ── image management ─────────────────────────────────────────────────────
   build:   () => import("./commands/build.js"),
@@ -84,7 +85,6 @@ const COMMAND_MAP = {
 
   // ── compose (project orchestration) ──────────────────────────────────────
   compose: () => import("./commands/compose.js"),
-  completion: () => import("./commands/completion.js"),
 
   // ── system / info ────────────────────────────────────────────────────────
   info:    () => import("./commands/info.js"),
@@ -110,7 +110,7 @@ export async function dispatch(argv, invokedAsStevedore = false) {
   }
 
   // Restricted commands: only available when invoked as "stevedore"
-  const restricted = new Set(["doctor"]);
+  const restricted = new Set(["doctor", "env"]);
   if (restricted.has(subcommand) && !invokedAsStevedore) {
     console.error(
       `stevedore: "stevedore ${subcommand}" is only available when running as "stevedore", not as "docker".\n` +

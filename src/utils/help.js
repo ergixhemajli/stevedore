@@ -69,11 +69,9 @@ System Commands:
 Compose Commands:
   compose     Run multi-container apps (proxied to docker-compose)
 
-Utility Commands:
-  completion  Output shell completion script (bash|zsh)
-
 Socket Commands:
   socket      Manage the Docker API server (start/stop/status) — see docs for Testcontainers setup
+  env         Print shell exports (DOCKER_HOST/Testcontainers + DB Hikari defaults)
 
 Run 'stevedore COMMAND --help' for more information on a command.
 
@@ -82,6 +80,9 @@ by apple/container and will be ignored with a warning.
 
 For Testcontainers support, start the API server with:
   stevedore socket start
+
+For shell exports (including DB_HIKARI_*), run:
+  eval "$(stevedore env)"
 
 See https://github.com/stevedore for setup instructions.
 `);

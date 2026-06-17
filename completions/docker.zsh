@@ -1,7 +1,70 @@
 #compdef docker stevedore
 
+_stevedore_list_containers_by_state() {
+  local scope="$1"
+  local all_flag=""
+  if [[ "$scope" != "running" ]]; then
+    all_flag="-a"
+  fi
+
+  # Prefer structured JSON so completion is independent of table column order.
+  if command -v python3 >/dev/null 2>&1; then
+    docker ps $all_flag --format json 2>/dev/null | python3 - "$scope" <<'PY'
+import json, sys
+scope = sys.argv[1]
+raw = sys.stdin.read().strip()
+if not raw:
+    raise SystemExit(0)
+try:
+    data = json.loads(raw)
+except Exception:
+    raise SystemExit(0)
+if isinstance(data, dict):
+    data = [data]
+vals = set()
+for c in data:
+    state = str((c.get("status") or {}).get("state") or "")
+    if scope == "running" and state != "running":
+        continue
+    if scope == "stopped" and state == "running":
+        continue
+
+    cid = str(c.get("id") or "").strip()
+    if cid:
+        vals.add(cid)
+
+    cfg = c.get("configuration") or {}
+    cfg_id = str(cfg.get("id") or "").strip()
+    if cfg_id:
+        vals.add(cfg_id)
+
+    host = ""
+    nets = (c.get("status") or {}).get("networks") or []
+    if nets and isinstance(nets, list):
+        host = str((nets[0] or {}).get("hostname") or "").strip()
+    if host:
+        vals.add(host)
+
+for v in sorted(vals):
+    print(v)
+PY
+    return
+  fi
+
+  # Fallback for environments without python3.
+  docker ps $all_flag 2>/dev/null | awk 'NR>1 {print $1}' | sort -u
+}
+
 _stevedore_list_containers() {
-  docker ps -a 2>/dev/null | awk 'NR>1 {print $1}'
+  _stevedore_list_containers_by_state all
+}
+
+_stevedore_list_running_containers() {
+  _stevedore_list_containers_by_state running
+}
+
+_stevedore_list_stopped_containers() {
+  _stevedore_list_containers_by_state stopped
 }
 
 _stevedore_list_images() {
@@ -30,9 +93,21 @@ _stevedore_docker_complete() {
   fi
 
   case "$words[2]" in
-    attach|exec|inspect|kill|logs|port|rename|restart|rm|start|stats|stop|top|wait|pause|unpause)
+    attach|exec|inspect|logs|port|rename|rm|top|wait)
       local -a containers
       containers=(${(f)"$(_stevedore_list_containers)"})
+      compadd -a containers
+      return
+      ;;
+    kill|restart|stats|stop|pause|unpause)
+      local -a containers
+      containers=(${(f)"$(_stevedore_list_running_containers)"})
+      compadd -a containers
+      return
+      ;;
+    start)
+      local -a containers
+      containers=(${(f)"$(_stevedore_list_stopped_containers)"})
       compadd -a containers
       return
       ;;

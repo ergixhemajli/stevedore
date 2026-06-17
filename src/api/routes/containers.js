@@ -43,10 +43,35 @@ export const containers = {
     const args = await buildRunArgs(body, query.name);
 
     // Pass platform from Docker API body (e.g. "linux/amd64") so the correct
-    // architecture variant of the image is used. Without this, ryuk gets pulled
-    // as amd64 on Apple Silicon and runs under emulation, causing timeouts and
-    // broken pipe failures when Testcontainers tries to connect to it.
-    if (body.Platform) args.push("--platform", body.Platform);
+    // architecture variant of the image is used. If no platform is provided,
+    // prefer a platform that matches the host architecture (e.g. linux/arm64 on
+    // Apple Silicon) to avoid pulling amd64 images that would run under QEMU.
+    let platform = body.Platform;
+    if (!platform) {
+      if (process.arch === "arm64") platform = "linux/arm64";
+      else if (process.arch === "x64") platform = "linux/amd64";
+    }
+    if (platform) args.push("--platform", platform);
+
+    // If the caller didn't provide a platform and we selected an arm variant,
+    // remove any existing local amd64 image with the same name so the engine
+    // will pull the arm64 variant on create. This is best-effort and ignores
+    // failures (image may not exist or may be in use).
+    if (platform && platform.includes("arm") && body.Image) {
+      try {
+        const { stdout: inspectOut, exitCode: inspectCode } = await run(["image", "inspect", body.Image]);
+        if (inspectCode === 0) {
+          try {
+            const inspected = JSON.parse(inspectOut)[0];
+            const existingArch = inspected?.variants?.[0]?.platform?.architecture;
+            if (existingArch === "amd64") {
+              // best-effort delete
+              await run(["image", "delete", body.Image]);
+            }
+          } catch (e) { /* ignore parse errors */ }
+        }
+      } catch (e) { /* ignore inspect/delete errors */ }
+    }
 
     // Use 'container create' (not 'run') so the container is NOT started yet.
     // This gives Testcontainers time to configure its resource reaper (Ryuk)

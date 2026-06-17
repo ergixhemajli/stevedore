@@ -49,6 +49,7 @@ const ROUTES = [
   r("POST",   "/containers/:id/stop",            ["id"],       containers.stop),
   r("POST",   "/containers/:id/kill",            ["id"],       containers.kill),
   r("POST",   "/containers/:id/restart",         ["id"],       containers.restart),
+  r("POST",   "/containers/:id/rename",          ["id"],       containers.rename),
   r("DELETE", "/containers/:id",                 ["id"],       containers.remove),
   r("GET",    "/containers/:id/logs",            ["id"],       containers.logs),
   r("GET",    "/containers/:id/top",             ["id"],       containers.top),

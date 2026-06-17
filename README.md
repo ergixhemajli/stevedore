@@ -52,13 +52,30 @@ docker completion bash > ~/.stevedore/completion.bash
 source ~/.stevedore/completion.bash
 ```
 
-### 4. Add optional Testcontainers env vars
+### 4. Add optional env vars (Testcontainers + DB pool stability)
 
-Add this to your `~/.zshrc` (or `~/.bashrc`) if you use Testcontainers:
+For one-shot shell setup:
 
 ```bash
-export DOCKER_HOST=unix://$HOME/.stevedore/docker.sock
-export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.stevedore/docker.sock
+eval "$(stevedore env)"
+```
+
+To persist in your shell profile (`~/.zshrc` / `~/.bashrc`):
+
+```bash
+eval "$(stevedore env)"
+```
+
+This exports:
+- `DOCKER_HOST=unix://$HOME/.stevedore/docker.sock`
+- `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.stevedore/docker.sock`
+- `DB_HIKARI_MAX_LIFETIME_MS=55000`
+- `DB_HIKARI_KEEPALIVE_TIME_MS=30000`
+
+You can override defaults:
+
+```bash
+stevedore env --db-hikari-max-lifetime-ms 45000 --db-hikari-keepalive-time-ms 25000
 ```
 
 Then reload: `source ~/.zshrc`

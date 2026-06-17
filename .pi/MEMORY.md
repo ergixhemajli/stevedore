@@ -36,3 +36,11 @@ export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.stevedore/docker.sock
 - `body.Platform` comes from Docker API request body during container create
 - `query.platform` comes from Docker API query string during image pull
 - `container create` is used (not `run`) so Testcontainers can configure Ryuk before start
+
+## User Preferences / Corrections
+- [correction] When asked to “clean amd64 so arm auto-pulls next run”, user meant **commands to run on their machine**, not additional stevedore code changes.
+- [preference] User prefers practical, runnable operational steps (shell commands/scripts) over architecture explanation when troubleshooting local container/runtime setup.
+
+## Environment / Tooling Quirks
+- [tool-quirk] In this setup, `docker` may resolve to `stevedore`, which does not support full `docker image ...` subcommands. Scripts should detect this and fall back to `container` CLI.
+- [insight] For pgvector on ARM Macs, use explicit tag `pgvector/pgvector:0.8.0-pg16` (known to have arm64 variant) instead of floating `:pg16` when deterministic architecture is needed.

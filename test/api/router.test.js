@@ -81,6 +81,15 @@ describe("router — 404", () => {
     const body = JSON.parse(res.body);
     assert.ok(body.message.includes("No such endpoint"));
   });
+
+  it("matches /containers/:id/rename endpoint", async () => {
+    const { router } = await import("../../src/api/router.js");
+    const { req, res } = makeMockRequest("POST", "/containers/nonexistent/rename?name=new-name");
+    await router(req, res, null);
+    // Route should exist (handler decides status by container existence)
+    const body = JSON.parse(res.body || "{}");
+    assert.ok(!String(body.message ?? "").includes("No such endpoint"));
+  });
 });
 
 describe("router — ping", () => {
