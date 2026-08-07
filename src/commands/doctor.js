@@ -1,14 +1,16 @@
+#!/usr/bin/env node
+
 /**
  * commands/doctor.js
  *
  * Checks if stevedore and apple/container are properly installed and working.
- * Reports on:
+ * Verifies:
  *   - apple/container binary availability and version
  *   - Node.js version compatibility
- *   - Common permission issues
+ *   - Container runtime health (actually starts a container)
+ *   - Auto-repairs broken container system
  */
 
-import { exec } from "../utils/exec.js";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
@@ -34,6 +36,99 @@ function run(cmd, args = []) {
   });
 }
 
+/**
+ * Run a command with a timeout.
+ * @param {string} cmd
+ * @param {string[]} args
+ * @param {number} ms
+ * @returns {Promise<{stdout: string, stderr: string, code: number|null}>}
+ */
+function runWithTimeout(cmd, args, ms) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (code) => {
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code });
+    });
+    child.on("error", () => {
+      resolve({ stdout: "", stderr: "", code: null });
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve({ stdout: "", stderr: "timed out", code: null });
+    }, ms);
+    child.on("exit", () => clearTimeout(timer));
+  });
+}
+
+/**
+ * Try to start container system if the health check fails.
+ * @returns {Promise<boolean>} true if restart fixed the issue
+ */
+async function tryAutoRepair() {
+  console.log("\nAuto-repair: restarting container system...\n");
+
+  const stopResult = await run("container", ["system", "stop", "--timeout", "30"]);
+  if (stopResult.code !== 0) {
+    console.log("   Stop failed:");
+    if (stopResult.stderr) console.log(`      ${stopResult.stderr.split("\n")[0]}`);
+    console.log("      Run 'container system stop; container system start' manually.");
+    return false;
+  }
+
+  const startResult = await run("container", ["system", "start", "--timeout", "30"]);
+  if (startResult.code !== 0) {
+    console.log("   Start failed:");
+    if (startResult.stderr) console.log(`      ${startResult.stderr.split("\n")[0]}`);
+    console.log("      Run 'container system start' manually.");
+    return false;
+  }
+
+  console.log("   Container system restarted.");
+
+  // Verify the restart worked
+  const health = await checkContainerHealth();
+  if (health.ok) {
+    console.log("   Container runtime verified after restart.");
+    return true;
+  }
+
+  console.log("   Container system restarted but runtime still not healthy.");
+  console.log("   Run 'stevedore doctor' again to verify.");
+  return false;
+}
+
+/**
+ * Verify container runtime can actually start a container.
+ * Runs a quick busybox container with a 30s timeout.
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+async function checkContainerHealth() {
+  // Check system status first
+  const status = await run("container", ["system", "status"]);
+  if (status.code !== 0) {
+    return { ok: false, error: `system status failed: ${status.stderr || "unknown error"}` };
+  }
+
+  // Try to actually run a container. Use busybox (smallest official image).
+  const result = await runWithTimeout("container", ["run", "--rm", "busybox:latest", "echo", "ok"], 30000);
+  if (result.code === 0) {
+    return { ok: true };
+  }
+
+  // Maybe busybox isn't cached — try alpine as second option
+  const result2 = await runWithTimeout("container", ["run", "--rm", "alpine:latest", "echo", "ok"], 30000);
+  if (result2.code === 0) {
+    return { ok: true };
+  }
+
+  const err = result.stderr || result2.stderr || "container startup failed";
+  return { ok: false, error: err.split("\n")[0] };
+}
+
 export default async function doctor(args) {
   const require = createRequire(import.meta.url);
   let stevedoreVersion = "unknown";
@@ -42,71 +137,65 @@ export default async function doctor(args) {
     stevedoreVersion = pkg.version;
   } catch {}
 
-  console.log("🔍 Stevedore Doctor Check\n");
-  console.log(`Stevedore version: ${stevedoreVersion}\n`);
-
   let hasErrors = false;
+  let autoRepairAttempted = false;
 
   // Check 1: Node.js version
   console.log("1. Node.js");
   const nodeVersion = process.version;
   const nodeMajor = parseInt(nodeVersion.slice(1).split(".")[0], 10);
   if (nodeMajor >= 20) {
-    console.log(`   ✅ ${nodeVersion} (meets minimum requirement: 20.0.0)`);
+    console.log(`   OK: ${nodeVersion} (meets minimum requirement: 20.0.0)`);
   } else {
-    console.log(`   ❌ ${nodeVersion} (minimum required: 20.0.0)`);
+    console.log(`   FAIL: ${nodeVersion} (minimum required: 20.0.0)`);
     hasErrors = true;
   }
   console.log();
 
   // Check 2: apple/container binary
   console.log("2. apple/container binary");
-  try {
-    const result = await run("container", ["--version"]);
-    if (result.code === 0 && result.stdout) {
-      console.log(`   ✅ ${result.stdout}`);
-    } else {
-      console.log(`   ❌ apple/container binary not found or failed to run`);
-      console.log(`      Install from https://github.com/apple/container/releases`);
-      hasErrors = true;
-    }
-  } catch {
-    console.log(`   ❌ apple/container binary not found in PATH`);
+  const versionResult = await run("container", ["--version"]);
+  if (versionResult.code === 0 && versionResult.stdout) {
+    console.log(`   OK: ${versionResult.stdout}`);
+  } else {
+    console.log(`   FAIL: apple/container binary not found or failed to run`);
     console.log(`      Install from https://github.com/apple/container/releases`);
     hasErrors = true;
+    console.log();
+    console.log("─".repeat(50));
+    console.log("Stevedore detected issues. Cannot continue checks without container binary.");
+    process.exitCode = 1;
+    return;
   }
   console.log();
 
-  // Check 3: apple/container status
-  console.log("3. apple/container daemon");
-  try {
-    const result = await run("container", ["system", "status"]);
-    if (result.code === 0) {
-      console.log(`   ✅ apple/container is running and accessible`);
-    } else {
-      console.log(`   ⚠️  apple/container may not be running or not accessible`);
-      if (result.stderr) {
-        console.log(`      ${result.stderr.split("\n")[0]}`);
+  // Check 3: Container runtime health
+  console.log("3. Container runtime");
+  const health = await checkContainerHealth();
+  if (health.ok) {
+    console.log(`   OK: Container runtime is working correctly`);
+  } else {
+    console.log(`   FAIL: Container runtime is not functional`);
+    console.log(`      Error: ${health.error}`);
+
+    if (!autoRepairAttempted) {
+      autoRepairAttempted = true;
+      const fixed = await tryAutoRepair();
+      if (fixed) {
+        console.log("   Auto-repair succeeded. Try running your command again.");
+      } else {
+        hasErrors = true;
       }
     }
-  } catch {
-    console.log(`   ⚠️  Cannot connect to apple/container daemon`);
-    console.log(`      Hint: Make sure apple/container is running`);
   }
-  console.log();
-
-  // Check 4: Node.js version
-  console.log("4. Docker Hub connectivity");
-  console.log(`   ℹ️  apple/container supports pulling images from Docker Hub`);
-  console.log(`   ✅ No login required for public images`);
   console.log();
 
   // Summary
   console.log("─".repeat(50));
   if (hasErrors) {
-    console.log("⚠️  Stevedore detected issues. Please fix the errors above.");
+    console.log("Stevedore detected issues. Please fix the errors above.");
     process.exitCode = 1;
   } else {
-    console.log("✅ Stevedore is ready to use!");
+    console.log("Stevedore is ready to use!");
   }
 }

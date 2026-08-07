@@ -40,18 +40,13 @@ export const containers = {
   async create({ query, body, res }) {
     if (!body?.Image) return apiError(res, 400, "Image is required");
 
-    const args = await buildRunArgs(body, query.name);
-
-    // Pass platform from Docker API body (e.g. "linux/amd64") so the correct
-    // architecture variant of the image is used. If no platform is provided,
-    // prefer a platform that matches the host architecture (e.g. linux/arm64 on
-    // Apple Silicon) to avoid pulling amd64 images that would run under QEMU.
     let platform = body.Platform;
     if (!platform) {
       if (process.arch === "arm64") platform = "linux/arm64";
       else if (process.arch === "x64") platform = "linux/amd64";
     }
-    if (platform) args.push("--platform", platform);
+
+    const args = await buildRunArgs(body, query.name, platform);
 
     // If the caller didn't provide a platform and we selected an arm variant,
     // remove any existing local amd64 image with the same name so the engine
@@ -256,9 +251,10 @@ function frameLog(stream, chunk) {
 // ---------------------------------------------------------------------------
 // Flag builder: Docker ContainerConfig → container run args
 // ---------------------------------------------------------------------------
-async function buildRunArgs(config, name) {
+async function buildRunArgs(config, name, platform) {
   const args = ["run", "--detach"];
 
+  if (platform) args.push("--platform", platform);
   if (name) args.push("--name", name);
 
   // Environment

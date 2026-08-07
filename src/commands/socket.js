@@ -35,6 +35,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { CONTAINER_BIN } from "../utils/exec.js";
 
 const STATE_DIR = path.join(os.homedir(), ".stevedore");
 const PID_FILE  = path.join(STATE_DIR, "server.pid");
@@ -78,6 +79,15 @@ To use with Testcontainers, set:
 
 async function socketStart(socketPath) {
   fs.mkdirSync(STATE_DIR, { recursive: true });
+
+  // Ensure container system is running before starting the API server.
+  await new Promise((resolve) => {
+    const child = spawn(CONTAINER_BIN, ["system", "start"], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    child.on("close", () => resolve());
+    child.on("error", () => resolve());
+  });
 
   if (isRunning()) {
     const pid = fs.readFileSync(PID_FILE, "utf8").trim();
