@@ -135,6 +135,14 @@ export const containers = {
     res.writeHead(204); res.end();
   },
 
+  // ── Rename ────────────────────────────────────────────────────────────────
+  // apple/container does not support renaming containers (internal ID is immutable).
+  // Return 204 as a no-op. Compose will keep the internal suffixed IDs
+  // (e.g. atlas-db_atlas-db) but won't crash on recreate.
+  async rename({ params, query, res }) {
+    res.writeHead(204); res.end();
+  },
+
   // ── Logs ──────────────────────────────────────────────────────────────────
   async logs({ params, query, req, res }) {
     const args = ["logs", params.id];
