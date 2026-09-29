@@ -43,7 +43,7 @@ export const containers = {
   // ── Create ────────────────────────────────────────────────────────────────
   async create({ query, body, res }) {
     // Docker API uses "Image" (capital I); some clients send "imageName"
-    const image = body?.Image ?? body?.imageName ?? null;
+    const image = body?.Image ?? body?.imageName ?? query?.Image ?? null;
     if (!image) return apiError(res, 400, "Image is required");
 
     let platform = body.Platform;

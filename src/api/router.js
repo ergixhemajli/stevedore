@@ -178,7 +178,7 @@ export async function router(req, res, body) {
       return res.end(JSON.stringify({ message: paramErr }));
     }
 
-    const bodyObj = body ? tryJSON(body) : null;
+    const bodyObj = (body && typeof body === "string") ? tryJSON(body) : (body ?? null);
     await route.handler({ req, res, params, query, body: bodyObj, rawBody: body, apiVersion });
     return;
   }
