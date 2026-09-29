@@ -104,6 +104,7 @@ export const containers = {
 
   // ── Restart ───────────────────────────────────────────────────────────────
   async restart({ params, res }) {
+    bumpRestartCount(params.id);
     await run(["stop", params.id]);
     const { stderr, exitCode } = await run(["start", params.id]);
     if (exitCode !== 0) return apiError(res, 404, stderr);
@@ -223,6 +224,21 @@ export const containers = {
     });
   },
 };
+
+// ---------------------------------------------------------------------------
+// Restart tracking (container ID → restart count)
+// ---------------------------------------------------------------------------
+const restartCounters = new Map();
+
+function bumpRestartCount(containerId) {
+  const count = (restartCounters.get(containerId) ?? 0) + 1;
+  restartCounters.set(containerId, count);
+  return count;
+}
+
+function getRestartCount(containerId) {
+  return restartCounters.get(containerId) ?? 0;
+}
 
 // ---------------------------------------------------------------------------
 // In-memory exec store (exec ID → { containerId, config })
@@ -426,9 +442,11 @@ function toDockerInspect(c = {}) {
 
   const primaryNetwork = (stateObj.networks ?? [])[0] ?? {};
   const primaryIp = (primaryNetwork.ipv4Address ?? "").split("/")[0] ?? "";
+  const containerId = c.id ?? cfg.id ?? c.ID ?? "";
+  const restartCount = getRestartCount(containerId);
 
   return {
-    Id: c.id ?? cfg.id ?? c.ID ?? "",
+    Id: containerId,
     Name: `/${cfg.id ?? c.id ?? c.name ?? c.Name ?? ""}`,
     Image: imageRef,
     Created: cfg.creationDate ?? c.created ?? "",
@@ -442,7 +460,9 @@ function toDockerInspect(c = {}) {
       Error: "",
       StartedAt: stateObj.startedDate ?? "",
       FinishedAt: stateObj.finishedDate ?? stateObj.finishedAt ?? "",
+      Recreate: 0,
     },
+    RestartCount: restartCount,
     Config: {
       Image: imageRef,
       Env: env,

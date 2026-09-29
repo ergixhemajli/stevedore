@@ -35,6 +35,9 @@ import os from "node:os";
 
 import { router } from "./router.js";
 
+/** Debug mode: set STEVEDORE_DEBUG=1 for verbose request logging */
+export const DEBUG = process.env.STEVEDORE_DEBUG === "1";
+
 export const DEFAULT_SOCKET = process.env.STEVEDORE_SOCKET
   ?? path.join(os.homedir(), ".stevedore", "docker.sock");
 
@@ -48,8 +51,11 @@ export function createServer() {
     const start = Date.now();
     const body = await collectBody(req);
     console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.url}`
+      `[${new Date().toISOString()}] ${req.method} ${req.url} → ${res.statusCode ?? "?"} (${Date.now() - start}ms)`
     );
+    if (DEBUG && body) {
+      console.log(`  body: ${JSON.stringify(body).slice(0, 500)}${JSON.stringify(body).length > 500 ? "..." : ""}`);
+    }
 
     try {
       await router(req, res, body);
@@ -62,10 +68,27 @@ export function createServer() {
   });
 }
 
+const MAX_BODY = 10 * 1024 * 1024; // 10 MiB
+
 async function collectBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  return chunks.length > 0 ? Buffer.concat(chunks).toString() : null;
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY) {
+      throw new Error(`request body too large (${size} bytes, max ${MAX_BODY})`);
+    }
+    chunks.push(chunk);
+  }
+  const raw = chunks.length > 0 ? Buffer.concat(chunks) : null;
+  if (!raw) return null;
+  const text = raw.toString();
+  // Validate JSON — Docker API always sends JSON bodies on mutating endpoints
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("invalid JSON in request body");
+  }
 }
 
 /**

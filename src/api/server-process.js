@@ -8,8 +8,14 @@
  */
 
 import { startServer, DEFAULT_SOCKET } from "./server.js";
+import { startSupervisor } from "../utils/supervisor.js";
 
 const socketPath = process.env.STEVEDORE_SOCKET ?? DEFAULT_SOCKET;
+
+// Start the restart supervisor before the API server
+startSupervisor().catch((err) => {
+  console.error(`stevedore: supervisor start failed: ${err.message}`);
+});
 
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT",  () => process.exit(0));

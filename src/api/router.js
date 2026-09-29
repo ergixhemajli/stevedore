@@ -88,6 +88,37 @@ const ROUTES = [
 // ---------------------------------------------------------------------------
 // Route compiler
 // ---------------------------------------------------------------------------
+// ── URL param validators ────────────────────────────────────────────────
+// Docker container/image/network/volume IDs are hex strings (short or full)
+// Names can contain alphanumerics, dashes, underscores, dots, and slashes.
+const CONTAINER_ID_RE  = /^[a-f0-9]{64}$/;
+const SHORT_ID_RE      = /^[a-f0-9]{6,64}$/;
+const IMAGE_NAME_RE    = /^[a-zA-Z0-9][a-zA-Z0-9.\/_-]*$/;
+const NETWORK_NAME_RE  = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+const VOLUME_NAME_RE   = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+/**
+ * Validate URL path parameters against Docker naming conventions.
+ * Returns an error message string, or null if valid.
+ */
+function validateParams(params) {
+  // Check container IDs
+  if (params.id && typeof params.id === "string") {
+    // Could be a short/full ID or a name — accept both
+    if (!CONTAINER_ID_RE.test(params.id) && !SHORT_ID_RE.test(params.id) &&
+        !NETWORK_NAME_RE.test(params.id) && !VOLUME_NAME_RE.test(params.id)) {
+      return `invalid container ID or name: ${params.id}`;
+    }
+  }
+  // Check image names (may contain slashes for registry paths)
+  if (params.name && typeof params.name === "string") {
+    if (!IMAGE_NAME_RE.test(params.name)) {
+      return `invalid image name: ${params.name}`;
+    }
+  }
+  return null;
+}
+
 function r(method, path, paramNames, handler) {
   const pattern = new RegExp(
     "^" + path.replace(/:([a-z]+)/gi, "([^/]+)") + "$"
@@ -139,6 +170,13 @@ export async function router(req, res, body) {
       const raw = match[i + 1] ?? "";
       params[name] = decodePathParam(raw);
     });
+
+    // Validate URL params
+    const paramErr = validateParams(params);
+    if (paramErr) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ message: paramErr }));
+    }
 
     const bodyObj = body ? tryJSON(body) : null;
     await route.handler({ req, res, params, query, body: bodyObj, rawBody: body, apiVersion });

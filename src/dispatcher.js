@@ -31,19 +31,20 @@ import { printHelp } from "./utils/help.js";
 // ---------------------------------------------------------------------------
 const COMMAND_MAP = {
   // ── container lifecycle ──────────────────────────────────────────────────
-  run:     () => import("./commands/run.js"),
-  create:  () => import("./commands/create.js"),
-  start:   () => import("./commands/start.js"),
-  stop:    () => import("./commands/stop.js"),
-  restart: () => import("./commands/restart.js"),
-  kill:    () => import("./commands/kill.js"),
-  rm:      () => import("./commands/rm.js"),
-  exec:    () => import("./commands/exec.js"),
-  attach:  () => import("./commands/attach.js"),
-  wait:    () => import("./commands/wait.js"),
-  rename:  () => import("./commands/rename.js"),
-  pause:   () => import("./commands/pause.js"),
-  unpause: () => import("./commands/unpause.js"),
+  run:         () => import("./commands/run.js"),
+  create:      () => import("./commands/create.js"),
+  start:       () => import("./commands/start.js"),
+  stop:        () => import("./commands/stop.js"),
+  restart:     () => import("./commands/restart.js"),
+  kill:        () => import("./commands/kill.js"),
+  rm:          () => import("./commands/rm.js"),
+  exec:        () => import("./commands/exec.js"),
+  attach:      () => import("./commands/attach.js"),
+  wait:        () => import("./commands/wait.js"),
+  rename:      () => import("./commands/rename.js"),
+  pause:       () => import("./commands/pause.js"),
+  unpause:     () => import("./commands/unpause.js"),
+  supervisor:  () => import("./commands/supervisor.js"),
 
   // ── container inspection ─────────────────────────────────────────────────
   ps:      () => import("./commands/ps.js"),

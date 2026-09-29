@@ -36,6 +36,7 @@ import os from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { CONTAINER_BIN } from "../utils/exec.js";
+import { startSupervisor } from "../utils/supervisor.js";
 
 const STATE_DIR = path.join(os.homedir(), ".stevedore");
 const PID_FILE  = path.join(STATE_DIR, "server.pid");
