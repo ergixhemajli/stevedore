@@ -134,12 +134,61 @@ export const containers = {
     if (query.follow === "1" || query.follow === "true") args.push("--follow");
     if (query.tail && query.tail !== "all") args.push("--tail", query.tail);
 
+    // ── Timestamps ────────────────────────────────────────────────────────
+    const showTimestamps = query.timestamps === "1" || query.timestamps === "true";
+    if (showTimestamps) args.push("--timestamp");
+
+    // ── Since / Until (time-based filtering) ─────────────────────────────
+    if (query.since) {
+      args.push("--since", query.since);
+    }
+    if (query.until) {
+      args.push("--until", query.until);
+    }
+
+    // ── Stderr/Stdout filtering ─────────────────────────────────────────
+    const showStdout = query.stdout !== "false" && query.stdout !== "0";
+    const showStderr = query.stderr !== "false" && query.stderr !== "0";
+    if (!showStdout && !showStderr) {
+      return apiError(res, 400, "at least one of stdout or stderr must be enabled");
+    }
+    if (!showStdout) args.push("--no-stdout");
+    if (!showStderr) args.push("--no-stderr");
+
     res.writeHead(200, { "Content-Type": "application/octet-stream" });
 
     const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
-    // Docker log stream multiplexing header: [stream_type(1), 0,0,0, size(4)]
-    child.stdout.on("data", (chunk) => res.write(frameLog(1, chunk)));
-    child.stderr.on("data", (chunk) => res.write(frameLog(2, chunk)));
+
+    // ── DEDUP: Deduplicate log lines ─────────────────────────────────────
+    const seenLines = new Set();
+    let lastStdoutLine = "";
+    let lastStderrLine = "";
+
+    function processLine(stream, chunk) {
+      const text = chunk.toString();
+      const lines = text.split("\n");
+
+      for (const line of lines) {
+        if (!line) continue;
+
+        // Deduplicate consecutive identical lines
+        const lastLine = stream === 1 ? lastStdoutLine : lastStderrLine;
+        if (line === lastLine) continue;
+
+        if (stream === 1) lastStdoutLine = line;
+        else lastStderrLine = line;
+
+        res.write(frameLog(stream, Buffer.from(line + "\n")));
+      }
+    }
+
+    if (showStdout) {
+      child.stdout.on("data", (chunk) => processLine(1, chunk));
+    }
+    if (showStderr) {
+      child.stderr.on("data", (chunk) => processLine(2, chunk));
+    }
+
     child.on("close", () => res.end());
     req.on("close", () => child.kill());
   },
@@ -157,9 +206,16 @@ export const containers = {
 
     res.writeHead(200, { "Content-Type": "application/json" });
     const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "ignore"] });
-    child.stdout.on("data", (d) => res.write(d));
-    child.on("close", () => res.end());
-    req.on("close", () => child.kill());
+    child.stdout.on("data", (d) => {
+      if (!res.destroyed) res.write(d);
+    });
+    child.on("close", () => {
+      if (!res.destroyed) res.end();
+    });
+    req.on("close", () => {
+      child.kill();
+      if (!res.destroyed) res.end();
+    });
   },
 
   // ── Wait ──────────────────────────────────────────────────────────────────
