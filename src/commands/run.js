@@ -11,12 +11,11 @@
 
 import { exec } from "../utils/exec.js";
 import { injectDbStabilityEnvArgs } from "../utils/db-stability.js";
-import { dropUnsupportedFlags, renameFlags } from "../utils/flags.js";
+import { translateFlags } from "../utils/flags.js";
 
 export default async function run(args) {
-  let translated = renameFlags(args);
+  let translated = translateFlags(args, "run");
   translated = handleMacAddress(translated);
-  translated = dropUnsupportedFlags(translated);
   translated = injectDbStabilityEnvArgs(translated);
   await exec(["run", ...translated]);
 }

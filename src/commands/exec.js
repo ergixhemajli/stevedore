@@ -1,2 +1,2 @@
 import { makePassthrough } from "../utils/passthrough.js";
-export default makePassthrough("exec");
+export default makePassthrough("exec", "exec");

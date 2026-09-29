@@ -19,10 +19,10 @@ import { translateFlags } from "./flags.js";
  * @param {string} containerSubcommand  Space-separated subcommand path, e.g. "image list"
  * @returns {(args: string[]) => Promise<void>}
  */
-export function makePassthrough(containerSubcommand) {
+export function makePassthrough(containerSubcommand, commandType) {
   const subcommandTokens = containerSubcommand.split(" ");
   return async function handler(args) {
-    const translated = translateFlags(args);
+    const translated = translateFlags(args, commandType);
     await exec([...subcommandTokens, ...translated]);
   };
 }

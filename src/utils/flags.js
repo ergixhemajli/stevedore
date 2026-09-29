@@ -162,13 +162,129 @@ export function dropUnsupportedFlags(argv) {
 }
 
 // ---------------------------------------------------------------------------
+// Flag splitting — stop translating at the first positional argument
+//
+// Docker semantics: flags before the positional (image/container name) are
+// CLI directives; flags after are passed to the container/child process.
+// E.g. `docker run -it alpine --hostname x` → --hostname x is NOT a Docker
+// CLI flag, it's an argument to the Alpine container.
+// ---------------------------------------------------------------------------
+
+// Flags whose next argument is a value (not a flag name)
+const VALUE_FLAGS = new Set([
+  "--address", "--annotation", "--attach", "--authfile",
+  "--blkio-weight", "--blkio-weight-device", "--cap-add", "--cap-drop",
+  "--cgroup-parent", "--cgroupns", "--cidfile", "--claim",
+  "--commit-message", "--composure", "--compress", "--config",
+  "--connfile", "--containerfile", "--context", "--cpus",
+  "--cpuset-cpus", "--cpuset-mems", "--cpu-shares", "--cpu-quota",
+  "--cpu-rt-period", "--cpu-rt-runtime", "--cpulink",
+  "--cpushare", "--cpu", "--cpuquota", "--cpuperiod",
+  "--cpurealtimeperiod", "--cpurealtimeruntime", "--credentialfile",
+  "--credentialjson", "--credstore", "--credutil",
+  "--crypto-key-fingerprint", "--data", "--debug", "--default-seccomp-optim",
+  "--delete", "--destination", "--disable",
+  "--dns-option", "--dns-search", "--dns",
+  "--domainname", "--entrypoint", "--env-file", "--env",
+  "--exclude", "--executor", "--exporter",
+  "--fabric", "--failure-mode", "--file", "--flush",
+  "--force-rm", "--force", "--format", "--fq-hostname",
+  "--gcloud-key-file", "--goos", "--group",
+  "--host", "--http-client-timeout", "--hyperv-cv",
+  "--hyperv-harddrive", "--hyperv-vhd", "--image",
+  "--image-key-fingerprint", "--indent", "--init",
+  "--inspection-record-path", "--ip6", "--ip",
+  "--iptables", "--label-file", "--label",
+  "--license", "--link-local-ip", "--link",
+  "--list", "--log-driver", "--log-opt",
+  "--memory-reservation", "--memory-swap", "--memory-swappiness",
+  "--memory", "--metric", "--mode", "--mount",
+  "--name", "--network", "--no-trunc", "--no-prune",
+  "--output", "--override", "--param", "--password-stdin",
+  "--password", "--platform", "--poll", "--port",
+  "--prefer-iwa", "--preserve-unchanged-input", "--printer",
+  "--priority", "--profile", "--progress", "--property",
+  "--publish", "--quiet", "--raw", "--ref",
+  "--refresh", "--region", "--remote", "--resource",
+  "--rm", "--root", "--scope", "--secret",
+  "--security-opt", "--service-image-name-prefix", "--shell",
+  "--sidecar", "--source", "--ssh", "--standard-log",
+  "--start", "--static-ip", "--static-mac", "--stop-signal",
+  "--stop-timeout", "--storage-opt", "--stream",
+  "--string-output", "--subnet", "--target",
+  "--tmpfs", "--trust-key", "--ttl",
+  "--type", "--ulimit", "--unset",
+  "--usage", "--user", "--userns",
+  "--uts",
+  "--volume-group", "--volume",
+  "--workdir",
+]);
+
+/**
+ * Split argv at the first positional argument.
+ * @param {string[]} argv
+ * @param {string} [positionalHint] — 'run'|'create'|'exec' to adjust positional detection
+ * @returns {{ flags: string[], positional: string[] }}
+ */
+export function splitFlagsAtPositional(argv, positionalHint) {
+  let splitAt = argv.length;
+
+  if (positionalHint === "run" || positionalHint === "create") {
+    // docker run [OPTIONS] IMAGE [COMMAND] [ARG...]
+    // The first non-flag token after -- is the image.
+    let i = 0;
+    while (i < argv.length) {
+      const token = argv[i];
+      if (token.startsWith("-") && token.length > 1) {
+        // If this is a value-taking flag, skip the next arg too.
+        if (VALUE_FLAGS.has(token)) {
+          i += 2;
+        } else {
+          i += 1;
+        }
+      } else {
+        // This is the positional (image name).
+        splitAt = i;
+        break;
+      }
+    }
+  } else if (positionalHint === "exec") {
+    // docker exec [OPTIONS] CONTAINER COMMAND [ARGS...]
+    // First non-flag token is the container name.
+    let i = 0;
+    while (i < argv.length) {
+      const token = argv[i];
+      if (token.startsWith("-") && token.length > 1) {
+        if (VALUE_FLAGS.has(token)) {
+          i += 2;
+        } else {
+          i += 1;
+        }
+      } else {
+        splitAt = i;
+        break;
+      }
+    }
+  }
+
+  return {
+    flags: argv.slice(0, splitAt),
+    positional: argv.slice(splitAt),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Convenience: apply all translations in one call
 // ---------------------------------------------------------------------------
+
 /**
- * Run all flag transformations: rename, then drop unsupported.
+ * Run all flag transformations: split at positional, rename, then drop unsupported.
  * @param {string[]} argv
+ * @param {string} [commandType] — 'run', 'create', or 'exec' for positional splitting
  * @returns {string[]}
  */
-export function translateFlags(argv) {
-  return dropUnsupportedFlags(renameFlags(argv));
+export function translateFlags(argv, commandType) {
+  const { flags, positional } = splitFlagsAtPositional(argv, commandType);
+  const translated = dropUnsupportedFlags(renameFlags(flags));
+  return [...translated, ...positional];
 }
