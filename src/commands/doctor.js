@@ -138,6 +138,7 @@ export default async function doctor(args) {
   } catch {}
 
   let hasErrors = false;
+  const autoRepair = args.includes("--fix") || args.includes("-f");
   let autoRepairAttempted = false;
 
   // Check 1: Node.js version
@@ -178,14 +179,20 @@ export default async function doctor(args) {
     console.log(`   FAIL: Container runtime is not functional`);
     console.log(`      Error: ${health.error}`);
 
-    if (!autoRepairAttempted) {
-      autoRepairAttempted = true;
-      const fixed = await tryAutoRepair();
-      if (fixed) {
-        console.log("   Auto-repair succeeded. Try running your command again.");
-      } else {
-        hasErrors = true;
+    if (autoRepair) {
+      console.log("\n   (--fix provided — auto-repairing. This will stop all running containers.)\n");
+      if (!autoRepairAttempted) {
+        autoRepairAttempted = true;
+        const fixed = await tryAutoRepair();
+        if (fixed) {
+          console.log("   Auto-repair succeeded. Try running your command again.");
+        } else {
+          hasErrors = true;
+        }
       }
+    } else {
+      console.log(`      Run 'stevedore doctor --fix' to attempt automatic repair (stops all containers).`);
+      hasErrors = true;
     }
   }
   console.log();

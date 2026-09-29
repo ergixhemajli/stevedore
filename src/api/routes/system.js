@@ -112,6 +112,6 @@ export const system = {
 
     child.stdout.on("data", (chunk) => res.write(chunk));
     req.on("close", () => child.kill());
-    child.on("exit", () => res.end());
+    child.on("close", () => res.end());
   },
 };

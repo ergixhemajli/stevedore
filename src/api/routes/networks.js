@@ -2,13 +2,18 @@
  * src/api/routes/networks.js
  */
 import { run, json, apiError } from "../run.js";
+import { parseFilters, matchesFilters } from "../filters.js";
 
 export const networks = {
-  async list({ res }) {
+  async list({ query, res }) {
     const { stdout, exitCode, stderr } = await run(["network", "list", "--format", "json"]);
     if (exitCode !== 0) return apiError(res, 500, stderr);
     const parsed = parseLines(stdout);
-    json(res, 200, parsed.map(toDockerNetwork));
+    const dockerFormat = parsed.map(toDockerNetwork);
+    json(res, 200, query.filters
+      ? dockerFormat.filter((net) => matchesFilters(parseFilters(query.filters), net))
+      : dockerFormat
+    );
   },
   async create({ body, res }) {
     if (!body?.Name) return apiError(res, 400, "Name required");

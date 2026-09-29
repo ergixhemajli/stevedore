@@ -2,13 +2,19 @@
  * src/api/routes/volumes.js
  */
 import { run, json, apiError } from "../run.js";
+import { parseFilters, matchesFilters } from "../filters.js";
 
 export const volumes = {
-  async list({ res }) {
+  async list({ query, res }) {
     const { stdout, exitCode, stderr } = await run(["volume", "list", "--format", "json"]);
     if (exitCode !== 0) return apiError(res, 500, stderr);
     const parsed = parseLines(stdout);
-    json(res, 200, { Volumes: parsed.map(toDockerVolume), Warnings: [] });
+    const dockerFormat = parsed.map(toDockerVolume);
+    json(res, 200, { Volumes: query.filters
+      ? dockerFormat.filter((vol) => matchesFilters(parseFilters(query.filters), vol))
+      : dockerFormat,
+      Warnings: []
+    });
   },
   async create({ body, res }) {
     const name = body?.Name ?? "";

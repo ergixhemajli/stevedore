@@ -44,12 +44,11 @@ export const DEFAULT_SOCKET = process.env.STEVEDORE_SOCKET
  */
 export function createServer() {
   return http.createServer(async (req, res) => {
-    // Log all requests for debugging
+    // Log method, URL only — never bodies (they contain env secrets).
     const start = Date.now();
     const body = await collectBody(req);
     console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.url}` +
-      (body?.length > 500 ? ` body=${JSON.stringify(body).slice(0,500)}...` : ` body=${JSON.stringify(body)}`)
+      `[${new Date().toISOString()}] ${req.method} ${req.url}`
     );
 
     try {
@@ -90,9 +89,10 @@ export async function startServer(socketPath = DEFAULT_SOCKET) {
     server.once("error", reject);
   });
 
-  // Make socket world-writable so non-root processes (like JVMs running
-  // Testcontainers) can connect without sudo
-  fs.chmodSync(socketPath, 0o666);
+  // Socket permissions — 0600 restricts to owner. Non-root processes need
+  // to run as the same user (or use groups) to connect. If you need other
+  // users to connect, set STEVEDORE_SOCKET to a shared location and chmod it.
+  fs.chmodSync(socketPath, 0o600);
 
   console.log(`stevedore: Docker API socket listening at ${socketPath}`);
   console.log(`stevedore: Set DOCKER_HOST=unix://${socketPath} (or TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=${socketPath})`);

@@ -20,6 +20,7 @@ import { run, runJSON, json, apiError } from "../run.js";
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { CONTAINER_BIN } from "../../utils/exec.js";
+import { parseFilters, matchesFilters } from "../filters.js";
 
 export const containers = {
 
@@ -32,7 +33,10 @@ export const containers = {
 
     // apple/container returns one JSON object per line or a JSON array
     const parsed = parseLines(stdout);
-    const dockerFormat = parsed.map(toDockerContainer);
+    const dockerFormat = parsed
+      .map(toDockerContainer)
+      .map((c) => ({ ...c, labels: c.Labels ?? c.labels ?? {} }))
+      .filter((c) => matchesFilters(parseFilters(query.filters), c));
     json(res, 200, dockerFormat);
   },
 
@@ -47,26 +51,6 @@ export const containers = {
     }
 
     const args = await buildRunArgs(body, query.name, platform);
-
-    // If the caller didn't provide a platform and we selected an arm variant,
-    // remove any existing local amd64 image with the same name so the engine
-    // will pull the arm64 variant on create. This is best-effort and ignores
-    // failures (image may not exist or may be in use).
-    if (platform && platform.includes("arm") && body.Image) {
-      try {
-        const { stdout: inspectOut, exitCode: inspectCode } = await run(["image", "inspect", body.Image]);
-        if (inspectCode === 0) {
-          try {
-            const inspected = JSON.parse(inspectOut)[0];
-            const existingArch = inspected?.variants?.[0]?.platform?.architecture;
-            if (existingArch === "amd64") {
-              // best-effort delete
-              await run(["image", "delete", body.Image]);
-            }
-          } catch (e) { /* ignore parse errors */ }
-        }
-      } catch (e) { /* ignore inspect/delete errors */ }
-    }
 
     // Use 'container create' (not 'run') so the container is NOT started yet.
     // This gives Testcontainers time to configure its resource reaper (Ryuk)
@@ -155,7 +139,7 @@ export const containers = {
     // Docker log stream multiplexing header: [stream_type(1), 0,0,0, size(4)]
     child.stdout.on("data", (chunk) => res.write(frameLog(1, chunk)));
     child.stderr.on("data", (chunk) => res.write(frameLog(2, chunk)));
-    child.on("exit", () => res.end());
+    child.on("close", () => res.end());
     req.on("close", () => child.kill());
   },
 
@@ -173,7 +157,7 @@ export const containers = {
     res.writeHead(200, { "Content-Type": "application/json" });
     const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "ignore"] });
     child.stdout.on("data", (d) => res.write(d));
-    child.on("exit", () => res.end());
+    child.on("close", () => res.end());
     req.on("close", () => child.kill());
   },
 
@@ -212,7 +196,7 @@ export const containers = {
       const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
       child.stdout.on("data", (d) => res.write(frameLog(1, d)));
       child.stderr.on("data", (d) => res.write(frameLog(2, d)));
-      child.on("exit", () => res.end());
+      child.on("close", () => res.end());
     }
 
     execStore.delete(params.id);
@@ -225,7 +209,7 @@ export const containers = {
     res.writeHead(200, { "Content-Type": "application/x-tar" });
     const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "ignore"] });
     child.stdout.pipe(res);
-    child.on("exit", (code) => { if (code !== 0) res.end(); });
+    child.on("close", (code) => { if (code !== 0) res.end(); });
   },
 
   async putArchive({ params, query, req, res }) {
@@ -233,7 +217,7 @@ export const containers = {
     const args = ["copy", "-", `${params.id}:${query.path}`];
     const child = spawn(CONTAINER_BIN, args, { stdio: ["pipe", "ignore", "ignore"] });
     req.pipe(child.stdin);
-    child.on("exit", (code) => {
+    child.on("close", (code) => {
       if (code !== 0) return apiError(res, 500, "copy failed");
       res.writeHead(200); res.end();
     });
@@ -298,8 +282,21 @@ async function buildRunArgs(config, name, platform) {
     }
   }
 
-  // Volume mounts
+  // Volume mounts (Binds = legacy named volumes)
   for (const mount of config.HostConfig?.Binds ?? []) args.push("--volume", mount);
+
+  // Additional mounts (HostConfig.Mounts) — skip host/path if app doesn't set them
+  // (apple/container may not support this yet)
+
+  // Extra hosts
+  for (const host of config.HostConfig?.ExtraHosts ?? []) {
+    args.push("--add-host", host);
+  }
+
+  // Tmpfs mounts
+  for (const [dest, opts] of Object.entries(config.HostConfig?.Tmpfs ?? {})) {
+    args.push("--tmpfs", `${dest}${opts ? ":" + opts : ""}`);
+  }
 
   // Network
   const network = config.HostConfig?.NetworkMode;
@@ -308,9 +305,22 @@ async function buildRunArgs(config, name, platform) {
   // Labels
   for (const [k, v] of Object.entries(config.Labels ?? {})) args.push("--label", `${k}=${v}`);
 
-  // Memory limit
+  // Memory limit — apple/container --memory takes MiB (not bytes)
   const mem = config.HostConfig?.Memory;
-  if (mem) args.push("--memory", String(mem));
+  if (mem) args.push("--memory", String(Math.ceil(mem / 1048576)));
+
+  // CPU quota — NanoCpus → --cpus (float)
+  const cpus = config.HostConfig?.NanoCpus;
+  if (cpus) args.push("--cpus", String(cpus / 1e9));
+
+  // CpuQuota / CpuPeriod → --cpu-quota (apple/container may not support both)
+  if (config.HostConfig?.CpuQuota && config.HostConfig?.CpuPeriod) {
+    args.push("--cpu-quota", String(config.HostConfig.CpuQuota));
+    args.push("--cpu-period", String(config.HostConfig.CpuPeriod));
+  }
+
+  // Hostname
+  if (config.Hostname) args.push("--hostname", config.Hostname);
 
   // Working directory
   if (config.WorkingDir) args.push("--workdir", config.WorkingDir);
@@ -321,9 +331,23 @@ async function buildRunArgs(config, name, platform) {
   // Image
   args.push(config.Image);
 
-  // Command
-  if (config.Cmd?.length) args.push(...config.Cmd);
-  else if (config.Entrypoint?.length) args.push(...config.Entrypoint);
+  // Entrypoint + Cmd — apple/container --entrypoint takes only the executable;
+  // the rest of the entrypoint + Cmd are treated as positional args.
+  const entrypoint = config.Entrypoint ?? [];
+  const cmd = config.Cmd ?? [];
+
+  if (entrypoint.length) {
+    args.push("--entrypoint", entrypoint[0]);
+    if (entrypoint.length > 1) {
+      args.push(...entrypoint.slice(1));
+    }
+    if (cmd.length) {
+      args.push(...cmd);
+    }
+  } else {
+    // No entrypoint: Cmd is the command to run.
+    if (cmd.length) args.push(...cmd);
+  }
 
   return args;
 }
@@ -361,6 +385,7 @@ function toDockerContainer(c = {}) {
     })),
     Labels: cfg.labels ?? c.labels ?? {},
     NetworkSettings: { Networks: {} },
+    ExitCode: c.exitCode ?? stateObj.exitCode ?? undefined,
   };
 }
 
@@ -413,10 +438,10 @@ function toDockerInspect(c = {}) {
       Paused: state === "paused",
       Restarting: false,
       Dead: state === "dead",
-      ExitCode: c.exitCode ?? stateObj.exitCode ?? 0,
+      ExitCode: c.exitCode ?? stateObj.exitCode ?? undefined,
       Error: "",
       StartedAt: stateObj.startedDate ?? "",
-      FinishedAt: "",
+      FinishedAt: stateObj.finishedDate ?? stateObj.finishedAt ?? "",
     },
     Config: {
       Image: imageRef,

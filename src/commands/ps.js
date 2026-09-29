@@ -141,7 +141,7 @@ function formatPorts(publishedPorts) {
 }
 
 function renderTable(rows) {
-  const headers = ["ID", "IMAGE", "OS", "ARCH", "STATE", "PORTS", "CPUS", "MEMORY", "STARTED"];
+  const headers = ["ID", "IMAGE", "OS", "ARCH", "STATE", "PORTS", "CPUS", "MEMORY", "STARTED", "EXIT"];
   const matrix = [headers, ...rows.map((r) => headers.map((h) => r[h] ?? "-"))];
   const widths = headers.map((_, idx) => Math.max(...matrix.map((row) => String(row[idx]).length)));
 
@@ -166,6 +166,7 @@ function normalizeRows(listJson) {
       CPUS: Number.isFinite(cfg?.resources?.cpus) ? String(cfg.resources.cpus) : "-",
       MEMORY: bytesToMemory(cfg?.resources?.memoryInBytes),
       STARTED: status?.startedDate ?? "-",
+      EXIT: status?.exitCode ?? "-",
     };
   });
 }

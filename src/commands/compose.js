@@ -153,11 +153,19 @@ function findComposeBinary() {
 
 function findBinary(name) {
   const dirs = process.env.PATH ? process.env.PATH.split(path.delimiter) : [];
+  // Resolve our own argv[1] so we can skip ourselves (avoid docker compose → docker → compose recursion).
+  let selfResolved;
+  try { selfResolved = fs.realpathSync(process.argv[1]); } catch { selfResolved = process.argv[1]; }
+
   for (const dir of dirs) {
     const full = path.join(dir, name);
     if (fs.existsSync(full) && fs.statSync(full).isFile()) {
       try {
         fs.accessSync(full, fs.constants.X_OK);
+        // Skip ourselves — resolve the candidate to its real path and compare.
+        let candidateResolved;
+        try { candidateResolved = fs.realpathSync(full); } catch { candidateResolved = full; }
+        if (candidateResolved === selfResolved) continue;
         return full;
       } catch {}
     }

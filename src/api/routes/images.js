@@ -5,6 +5,8 @@ import { run, json, apiError } from "../run.js";
 import { spawn } from "node:child_process";
 import { CONTAINER_BIN } from "../../utils/exec.js";
 
+import { parseFilters, matchesFilters } from "../filters.js";
+
 export const images = {
 
   async list({ query, res }) {
@@ -13,7 +15,11 @@ export const images = {
     const { stdout, stderr, exitCode } = await run(args);
     if (exitCode !== 0) return apiError(res, 500, stderr);
     const parsed = parseLines(stdout);
-    json(res, 200, parsed.map(toDockerImage));
+    const dockerFormat = parsed.map(toDockerImage);
+    json(res, 200, query.filters
+      ? dockerFormat.filter((img) => matchesFilters(parseFilters(query.filters), img))
+      : dockerFormat
+    );
   },
 
   async pull({ query, req, res }) {
@@ -38,30 +44,6 @@ export const images = {
       else if (process.arch === "x64") platform = "linux/amd64";
     }
     if (platform) args.push("--platform", platform);
-
-    // If we're about to pull an arm variant, remove any existing local amd64
-    // image with the same ref so the pull will fetch the arm64 variant. This
-    // avoids Docker/container reusing a cached amd64 manifest and running
-    // under QEMU on Apple Silicon.
-    if (platform && platform.includes("arm")) {
-      try {
-        const { stdout: inspectOut, exitCode: inspectCode } = await run(["image", "inspect", ref]);
-        if (inspectCode === 0) {
-          try {
-            const inspected = JSON.parse(inspectOut)[0];
-            const existingArch = inspected?.variants?.[0]?.platform?.architecture;
-            if (existingArch === "amd64") {
-              res.write(JSON.stringify({ status: `Removing local amd64 image ${ref} to force ${platform} pull` }) + "\n");
-              await run(["image", "delete", ref]);
-            }
-          } catch (e) {
-            // ignore parse errors
-          }
-        }
-      } catch (e) {
-        // ignore inspect/delete failures
-      }
-    }
 
     const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
 
@@ -92,17 +74,13 @@ export const images = {
       child.kill();
     });
 
-    child.on("exit", (code) => {
+    child.on("close", (code) => {
       clearInterval(heartbeat);
       if (code !== 0) {
         res.write(JSON.stringify({ error: `pull failed with exit code ${code}` }) + "\n");
       } else {
         res.write(JSON.stringify({ status: `Pulled image ${ref}` }) + "\n");
       }
-      res.end();
-    }).on("error", (err) => {
-      clearInterval(heartbeat);
-      res.write(JSON.stringify({ error: err.message }) + "\n");
       res.end();
     });
 
@@ -149,7 +127,7 @@ export const images = {
     req.pipe(child.stdin);
     child.stdout.on("data", (d) => res.write(JSON.stringify({ stream: d.toString() }) + "\n"));
     child.stderr.on("data", (d) => res.write(JSON.stringify({ stream: d.toString() }) + "\n"));
-    child.on("exit", (code) => {
+    child.on("close", (code) => {
       if (code !== 0) res.write(JSON.stringify({ error: "build failed" }) + "\n");
       res.end();
     });
