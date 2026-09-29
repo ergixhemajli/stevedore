@@ -235,7 +235,7 @@ export const containers = {
   },
 
   // ── Exec start ────────────────────────────────────────────────────────────
-  async execStart({ params, body, res }) {
+  async execStart({ params, body, req, res }) {
     const stored = execStore.get(params.id);
     if (!stored) return apiError(res, 404, `No such exec: ${params.id}`);
 
@@ -248,12 +248,39 @@ export const containers = {
       if (exitCode !== 0) return apiError(res, 500, stderr);
       res.writeHead(204); res.end();
     } else {
-      // Attach mode — stream output back
+      // Attach mode — stream output and input (interactive exec)
       res.writeHead(200, { "Content-Type": "application/octet-stream" });
-      const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
-      child.stdout.on("data", (d) => res.write(frameLog(1, d)));
-      child.stderr.on("data", (d) => res.write(frameLog(2, d)));
-      child.on("close", () => res.end());
+      const child = spawn(CONTAINER_BIN, args, { stdio: ["pipe", "pipe", "pipe"] });
+
+      // Forward stdin to child
+      req.on("data", (chunk) => {
+        if (!child.stdin.destroyed) child.stdin.write(chunk);
+      });
+      req.on("end", () => {
+        if (!child.stdin.destroyed) child.stdin.end();
+      });
+
+      // Forward stdout/stderr to response
+      child.stdout.on("data", (chunk) => {
+        if (!res.destroyed) res.write(frameLog(1, chunk));
+      });
+      child.stderr.on("data", (chunk) => {
+        if (!res.destroyed) res.write(frameLog(2, chunk));
+      });
+
+      child.on("close", (code) => {
+        if (!res.destroyed) res.end();
+        // Return exit code for non-detached exec
+        if (code !== undefined && code !== 0) {
+          // Write exit code as a final frame
+          res.write(frameLog(1, Buffer.from(`\nContainer exited with code ${code}\n`)));
+        }
+      });
+
+      req.on("close", () => {
+        child.kill();
+        if (!res.destroyed) res.end();
+      });
     }
 
     execStore.delete(params.id);
