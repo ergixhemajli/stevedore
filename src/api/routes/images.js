@@ -23,8 +23,30 @@ export const images = {
   },
 
   async pull({ query, req, res }) {
-    const ref = query.fromImage + (query.tag ? `:${query.tag}` : "");
-    if (!ref || ref === "undefined") return apiError(res, 400, "fromImage query parameter required");
+    const rawImage = query.fromImage;
+    const tag = query.tag;
+
+    if (!rawImage || rawImage === "undefined" || rawImage === "null") {
+      return apiError(res, 400, "fromImage query parameter required");
+    }
+
+    // ── Image reference normalization ─────────────────────────────────────
+    // Normalize short image names to full references:
+    //   alpine      → docker.io/library/alpine:latest
+    //   alpine:3.14 → docker.io/library/alpine:3.14
+    //   nginx:latest → docker.io/library/nginx:latest
+    //   already-qualified.io/repo → pass through
+    //   image@sha256:abc → pass through (digest reference)
+    let ref = rawImage;
+    if (!ref.includes("/") && !ref.startsWith("@")) {
+      // Short name: add docker.io/library prefix
+      ref = `docker.io/library/${ref}`;
+    }
+    if (!ref.includes("@") && !ref.includes(":")) {
+      // No tag or digest → default to latest
+      ref = `${ref}:latest`;
+    }
+    if (!ref) return apiError(res, 400, "fromImage query parameter required");
 
     res.writeHead(200, { "Content-Type": "application/json" });
 
