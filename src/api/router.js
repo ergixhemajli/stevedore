@@ -93,7 +93,7 @@ const ROUTES = [
 // Names can contain alphanumerics, dashes, underscores, dots, and slashes.
 const CONTAINER_ID_RE  = /^[a-f0-9]{64}$/;
 const SHORT_ID_RE      = /^[a-f0-9]{6,64}$/;
-const IMAGE_NAME_RE    = /^[a-zA-Z0-9][a-zA-Z0-9.\/_-]*$/;
+const IMAGE_NAME_RE    = /^[a-zA-Z0-9][a-zA-Z0-9.\/_:-]*$/;
 const NETWORK_NAME_RE  = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const VOLUME_NAME_RE   = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 

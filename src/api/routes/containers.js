@@ -42,7 +42,9 @@ export const containers = {
 
   // ── Create ────────────────────────────────────────────────────────────────
   async create({ query, body, res }) {
-    if (!body?.Image) return apiError(res, 400, "Image is required");
+    // Docker API uses "Image" (capital I); some clients send "imageName"
+    const image = body?.Image ?? body?.imageName ?? null;
+    if (!image) return apiError(res, 400, "Image is required");
 
     let platform = body.Platform;
     if (!platform) {
@@ -50,7 +52,7 @@ export const containers = {
       else if (process.arch === "x64") platform = "linux/amd64";
     }
 
-    const args = await buildRunArgs(body, query.name, platform);
+    const args = await buildRunArgs({ ...body, Image: image }, query.name, platform);
 
     // Use 'container create' (not 'run') so the container is NOT started yet.
     // This gives Testcontainers time to configure its resource reaper (Ryuk)
