@@ -45,6 +45,7 @@ const COMMAND_MAP = {
   pause:       () => import("./commands/pause.js"),
   unpause:     () => import("./commands/unpause.js"),
   supervisor:  () => import("./commands/supervisor.js"),
+  container:   () => import("./commands/container.js"),
 
   // ── container inspection ─────────────────────────────────────────────────
   ps:      () => import("./commands/ps.js"),
@@ -73,6 +74,7 @@ const COMMAND_MAP = {
   import:  () => import("./commands/import.js"),
   history: () => import("./commands/history.js"),
   search:  () => import("./commands/search.js"),
+  image:   () => import("./commands/image.js"),
 
   // ── network management ───────────────────────────────────────────────────
   network: () => import("./commands/network.js"),
@@ -91,6 +93,7 @@ const COMMAND_MAP = {
   info:    () => import("./commands/info.js"),
   version: () => import("./commands/version.js"),
   system:  () => import("./commands/system.js"),
+  prune:   () => import("./commands/prune.js"),
   events:  () => import("./commands/events.js"),
 };
 

@@ -24,6 +24,14 @@ describe("parseFilters", () => {
     });
   });
 
+  it("normalises the map form sent by Go clients (compose, Ryuk)", () => {
+    const raw = '{"label":{"org.testcontainers.sessionId=abc":true,"org.testcontainers=true":true},"status":{"running":true}}';
+    assert.deepEqual(parseFilters(raw), {
+      label: ["org.testcontainers.sessionId=abc", "org.testcontainers=true"],
+      status: ["running"],
+    });
+  });
+
   it("returns {} for missing/empty", () => {
     assert.deepEqual(parseFilters(""), {});
     assert.deepEqual(parseFilters(null), {});
@@ -56,6 +64,18 @@ describe("matchesFilters", () => {
   it("rejects missing label key", () => {
     const item = { labels: { "other": "value" } };
     assert.equal(matchesFilters({ label: ["com.docker.compose.project"] }, item), false);
+  });
+
+  it("map-form label filter excludes unrelated containers (Ryuk prune must not hit compose)", () => {
+    const filters = parseFilters('{"label":{"org.testcontainers.sessionId=abc":true,"org.testcontainers=true":true}}');
+    const compose = { labels: { "com.docker.compose.project": "atlas-services" } };
+    const own = { labels: { "org.testcontainers.sessionId": "abc", "org.testcontainers": "true" } };
+    assert.equal(matchesFilters(filters, compose), false);
+    assert.equal(matchesFilters(filters, own), true);
+  });
+
+  it("matches nothing for an unsupported filter key", () => {
+    assert.equal(matchesFilters({ bogus: ["x"] }, { labels: {} }), false);
   });
 
   // ---------- name ----------

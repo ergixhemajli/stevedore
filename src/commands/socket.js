@@ -56,6 +56,7 @@ export default async function socket(args) {
     case "start":  return socketStart(socketPath);
     case "stop":   return socketStop();
     case "status": return socketStatus();
+    case "autostart": return socketAutostart();
     default:
       console.log(`
 Usage: stevedore socket <command>
@@ -64,6 +65,8 @@ Commands:
   start [--socket <path>]   Start the Docker-compatible API server
   stop                      Stop the API server
   status                    Show whether the server is running
+  autostart                 Install/uninstall a launchd agent that keeps the
+                            API server running after reboot or crash
 
 The server listens on a Unix socket and translates Docker API calls into
 apple/container CLI invocations, enabling Testcontainers and similar tools.
@@ -131,6 +134,16 @@ async function socketStop() {
     console.log("stevedore: API server is not running");
     return;
   }
+
+  // If launchd is managing us, unload first so KeepAlive doesn't respawn.
+  const plist = path.join(os.homedir(), "Library/LaunchAgents", "com.stevedore.server.plist");
+  if (fs.existsSync(plist)) {
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync(`launchctl bootout gui/$(id -u)/com.stevedore.server 2>/dev/null`, { stdio: "ignore" });
+    } catch {}
+  }
+
   const pid = parseInt(fs.readFileSync(PID_FILE, "utf8").trim(), 10);
   try {
     process.kill(pid, "SIGTERM");
@@ -160,6 +173,40 @@ function isRunning() {
   const pid = parseInt(fs.readFileSync(PID_FILE, "utf8").trim(), 10);
   try { process.kill(pid, 0); return true; }
   catch { return false; }
+}
+
+async function socketAutostart() {
+  const { execSync } = await import("node:child_process");
+  const plist = path.join(os.homedir(), "Library/LaunchAgents", "com.stevedore.server.plist");
+
+  if (fs.existsSync(plist)) {
+    fs.unlinkSync(plist);
+    try { execSync(`launchctl bootout gui/$(id -u)/com.stevedore.server 2>/dev/null`, { stdio: "ignore" }); } catch {}
+    console.log("stevedore: launchd agent removed — API server will no longer auto-start");
+    return;
+  }
+
+  // Resolve the bundled plist template (shipped with stevedore) and fill in paths.
+  const template = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../scripts/com.stevedore.server.plist"
+  );
+  let xml = fs.readFileSync(template, "utf8");
+
+  const node = process.execPath;
+  const serverEntry = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../api/server-process.js"
+  );
+  xml = xml.replace(/__NODE__/g, node);
+  xml = xml.replace(/__SERVER__/g, serverEntry);
+  xml = xml.replace(/__STATE__/g, STATE_DIR);
+  xml = xml.replace(/~/g, os.homedir());
+
+  fs.mkdirSync(path.dirname(plist), { recursive: true });
+  fs.writeFileSync(plist, xml);
+  execSync(`launchctl bootstrap gui/$(id -u) "${plist}"`);
+  console.log("stevedore: launchd agent installed — API server now auto-starts at login and after crashes");
 }
 
 function printConnectionInfo(socketPath) {

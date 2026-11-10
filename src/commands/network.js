@@ -15,6 +15,7 @@
 
 import { exec } from "../utils/exec.js";
 import { translateFlags } from "../utils/flags.js";
+import { prune } from "../utils/prune.js";
 
 const SUBCOMMAND_MAP = {
   create:     "create",
@@ -51,6 +52,8 @@ export default async function network(args) {
     process.exitCode = 1;
     return;
   }
+
+  if (mapped === "prune") { await prune("networks", rest); return; }
 
   await exec(["network", mapped, ...translateFlags(rest)]);
 }

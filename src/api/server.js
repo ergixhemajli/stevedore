@@ -107,6 +107,13 @@ export async function startServer(socketPath = DEFAULT_SOCKET) {
 
   const server = createServer();
 
+  server.on("clientError", (_err, socket) => {
+    // Aborted mid-request (e.g. client gave up waiting for a slow `stop`):
+    // the pending container CLI call keeps running in the background, so the
+    // container stops eventually — just destroy the dead socket.
+    socket.destroy();
+  });
+
   await new Promise((resolve, reject) => {
     server.listen(socketPath, resolve);
     server.once("error", reject);

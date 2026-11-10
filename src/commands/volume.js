@@ -16,6 +16,7 @@
 
 import { exec } from "../utils/exec.js";
 import { translateFlags } from "../utils/flags.js";
+import { prune } from "../utils/prune.js";
 
 const SUBCOMMAND_MAP = {
   create:  "create",
@@ -41,6 +42,8 @@ export default async function volume(args) {
     process.exitCode = 1;
     return;
   }
+
+  if (mapped === "prune") { await prune("volumes", rest); return; }
 
   // Drop --driver flag (docker-specific)
   const cleaned = [];

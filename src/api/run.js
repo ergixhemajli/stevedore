@@ -19,24 +19,66 @@ import { CONTAINER_BIN } from "../utils/exec.js";
  * @param {string[]} args
  * @returns {Promise<{ stdout: string, stderr: string, exitCode: number }>}
  */
-export async function run(args) {
+const activeChildren = new Set();
+const childTimers = new Set();
+
+export async function run(args, { timeoutMs } = {}) {
   return new Promise((resolve) => {
     const child = spawn(CONTAINER_BIN, args);
     const out = [];
     const err = [];
+    activeChildren.add(child);
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      activeChildren.delete(child);
+      if (timeout) clearTimeout(timeout);
+      resolve(result);
+    };
+    let timeout;
+    if (timeoutMs) {
+      timeout = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch {}
+        child.once("close", () => {
+          finish({
+            stdout: Buffer.concat(out).toString().trim(),
+            stderr: Buffer.concat(err).toString().trim() || `timed out after ${timeoutMs}ms`,
+            exitCode: 124,
+          });
+        });
+      }, timeoutMs);
+      timeout.unref();
+      childTimers.add(timeout);
+    }
     child.stdout.on("data", (d) => out.push(d));
     child.stderr.on("data", (d) => err.push(d));
     child.on("close", (code) => {
-      resolve({
+      finish({
         stdout: Buffer.concat(out).toString().trim(),
         stderr: Buffer.concat(err).toString().trim(),
         exitCode: code ?? 0,
       });
     });
     child.on("error", (e) => {
-      resolve({ stdout: "", stderr: e.message, exitCode: 1 });
+      finish({ stdout: "", stderr: e.message, exitCode: 1 });
     });
   });
+}
+
+/**
+ * Terminate all child processes spawned via run() — called on server shutdown
+ * so a detached API server doesn't leave `container stop/kill ...` orphans
+ * behind, which would still act on containers later (e.g. stopping a
+ * container that was restarted in the meantime).
+ */
+export function terminateAllChildren() {
+  for (const t of childTimers) clearTimeout(t);
+  childTimers.clear();
+  for (const c of activeChildren) {
+    try { c.kill("SIGKILL"); } catch {}
+  }
+  activeChildren.clear();
 }
 
 /**

@@ -32,6 +32,7 @@ function makeMockRequest(method, url) {
       this.body = (this.body ?? "") + data;
       return true;
     },
+    on: () => res,
   };
   return { req, res };
 }

@@ -38,7 +38,9 @@
     "failure_lessons": {
       "correction_docker_vs_stevedore": "Assistant initially changed behavior to wrap docker directly or shifted command surfaces inconsistently. User clarified repeatedly: normal commands must be invoked as docker commands, translated to apple/container, with stevedore reserved for doctor/meta.",
       "tool_quirk_container_path": "Hardcoding /usr/local/bin/container failed on Apple Silicon (ENOENT). Use /opt/homebrew/bin/container fallback or resolve via `command -v container`.",
-      "insight_testcontainers": "Testcontainers requires a Docker Engine API-compatible Unix socket; CLI command translation alone is insufficient. A socket/API shim is required."
+      "insight_testcontainers": "Testcontainers requires a Docker Engine API-compatible Unix socket; CLI command translation alone is insufficient. A socket/API shim is required.",
+      "node_http_req_close_pitfall": "In Node (v26), if collectBody consumes the request via `for await (const c of req)` before handlers register listeners, `req` no longer emits 'close' on client disconnect — only `res` does. Killing spawned children on client disconnect MUST use `res.on('close', ...)`, not `req.on('close', ...)`. The req-based version silently leaked 128+ orphaned `container logs --follow` processes.",
+      "test_mock_res_needs_on": "test/api/router.test.js mock res must implement `on: () => res` — handlers call res.on('close'). Missing it throws TypeError inside the pull handler AFTER its heartbeat setInterval is registered, leaking the interval so the test process never exits."
     },
     "reference_project": {
       "name": "swift-test-containers (Mongey)",

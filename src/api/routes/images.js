@@ -91,13 +91,14 @@ export const images = {
       }) + "\n");
     }, 5000);
 
-    req.on("close", () => {
+    res.on("close", () => {
       clearInterval(heartbeat);
       child.kill();
     });
 
     child.on("close", (code) => {
       clearInterval(heartbeat);
+      if (res.destroyed) return;
       if (code !== 0) {
         res.write(JSON.stringify({ error: `pull failed with exit code ${code}` }) + "\n");
       } else {
@@ -108,6 +109,7 @@ export const images = {
 
     child.on("error", (err) => {
       clearInterval(heartbeat);
+      if (res.destroyed) return;
       res.write(JSON.stringify({ error: err.message }) + "\n");
       res.end();
     });

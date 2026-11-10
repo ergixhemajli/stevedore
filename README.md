@@ -105,9 +105,12 @@ Stevedore maps the full `docker` CLI to `apple/container`. Most commands work di
 | `docker logs` | `container logs` |
 | `docker network create` | `container network create` |
 | `docker volume ls` | `container volume list` |
-| `docker system prune` | `container prune` + `container image prune` |
+| `docker system prune [-a] [-f] [--volumes]` | `container prune` + `container network prune` + `container image prune [--all]` (+ `container volume prune` with `--volumes`) |
+| `docker container\|image\|volume\|network prune [-a] [-f]` | the matching `container ... prune` |
 
 Some docker flags are automatically translated (`--net` → `--network`) and unsupported ones are silently dropped with a warning, so your existing scripts keep working.
+
+`prune` commands ask for confirmation like Docker does; `-f` skips the prompt. `docker prune` is a stevedore-only shorthand for `docker system prune` (real Docker has no top-level `prune`). `--filter` is not supported by apple/container, so it is refused instead of ignored (ignoring it would prune more than you asked for). Volume pruning removes every volume not used by a container, named ones included.
 
 ## Compose Support
 

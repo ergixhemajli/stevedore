@@ -30,6 +30,13 @@
 - Stevedore handles this: empty `HostPort` → assign random port on host
 - Verified working via smoke test (register → ACK response)
 
+### Ryuk containers pile up as `stopped` (FIXED)
+- **Symptom**: `docker ps -a` fills with `testcontainers-ryuk-<session>` containers in state `stopped`
+- **Root cause**: Testcontainers creates Ryuk with `HostConfig.AutoRemove=true`, and Ryuk's own labels lack `org.testcontainers.sessionId`, so Ryuk never reaps itself — it relies on the engine removing it once it exits. `buildRunArgs` ignored `AutoRemove`.
+- **Fix**: `src/api/routes/containers.js` maps `HostConfig.AutoRemove` → `container create --rm` (apple/container removes the container itself when it stops, even after a detached `start`)
+- **Needs**: restart the API server (`docker socket stop && docker socket start`) to load the fix; clear older leftovers with `docker container prune -f`
+- **Observed on container 1.5.0**: Ryuk *does* reach the stevedore socket through the virtiofs mount — its `DELETE ...?force=1&v=1` calls show up in `~/.stevedore/server.log` and its own log ends with `removed containers=N ... done`
+
 ## Testcontainers Smoke Test (Manual Verification)
 ```python
 # Create container with port binding

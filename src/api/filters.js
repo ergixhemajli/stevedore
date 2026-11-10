@@ -3,6 +3,7 @@
  *
  * Docker Engine API passes filters as a JSON-encoded query parameter:
  *   filters={"label":["com.docker.compose.project=myapp","name=mycontainer"]}
+ *   filters={"label":{"com.docker.compose.project=myapp":true}}   (Go clients: compose, Ryuk)
  *   filters={"status":["running","exited"]}
  *   filters={"id":["abc123"]}
  *   filters={"name":["^mycontainer"]}   (prefix match, regex-like)
@@ -24,7 +25,9 @@
 export function parseFilters(raw) {
   if (!raw) return {};
   try {
-    return JSON.parse(raw);
+    return Object.fromEntries(
+      Object.entries(JSON.parse(raw)).map(([k, v]) => [k, Array.isArray(v) ? v : Object.keys(v ?? {})])
+    );
   } catch {
     return {};
   }
@@ -64,9 +67,11 @@ export function matchesFilters(filters, item) {
         const id = (item.Id ?? item.id ?? "");
         if (!id.startsWith(matcher)) return false;
       } else if (key === "status") {
-        // status: match on container status string
+        // status: match against the state word, e.g. "running" matches
+        // both "running" and "running (Uptime)" (Docker format: "state (X)")
         const status = item.Status ?? item.status ?? item.State ?? "";
-        if (status !== matcher) return false;
+        const state = status.split(" ")[0];
+        if (state !== matcher) return false;
       } else if (key === "volume") {
         // volume: filter by mount name (simplified)
         const mounts = item.Mounts ?? item.mounts ?? [];
@@ -98,6 +103,8 @@ export function matchesFilters(filters, item) {
         // reference: for images pull
         const ref = item.RepoTags?.[0] ?? item.image ?? item.name ?? "";
         if (!ref.includes(matcher)) return false;
+      } else {
+        return false;
       }
     }
   }

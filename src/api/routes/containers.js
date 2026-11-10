@@ -36,7 +36,8 @@ export const containers = {
     const dockerFormat = parsed
       .map(toDockerContainer)
       .map((c) => ({ ...c, labels: c.Labels ?? c.labels ?? {} }))
-      .filter((c) => matchesFilters(parseFilters(query.filters), c));
+      .filter((c) => matchesFilters(parseFilters(query.filters), c))
+      .sort((a, b) => b.Created - a.Created);
     json(res, 200, dockerFormat);
   },
 
@@ -90,7 +91,10 @@ export const containers = {
   async stop({ params, query, res }) {
     const args = ["stop", params.id];
     if (query.t) args.push("--time", query.t);
-    const { stderr, exitCode } = await run(args);
+    // ponytail: fixed 60s server-side cap — `--time` is enforced by
+    // apple/container itself, but a hung VM would otherwise hang the
+    // client's HTTP request indefinitely.
+    const { stderr, exitCode } = await run(args, { timeoutMs: 60_000 });
     if (exitCode !== 0) return apiError(res, 404, stderr);
     res.writeHead(204); res.end();
   },
@@ -107,8 +111,9 @@ export const containers = {
   // ── Restart ───────────────────────────────────────────────────────────────
   async restart({ params, res }) {
     bumpRestartCount(params.id);
-    await run(["stop", params.id]);
-    const { stderr, exitCode } = await run(["start", params.id]);
+    const stop = await run(["stop", params.id], { timeoutMs: 60_000 });
+    if (stop.exitCode !== 0) return apiError(res, 404, stop.stderr);
+    const { stderr, exitCode } = await run(["start", params.id], { timeoutMs: 60_000 });
     if (exitCode !== 0) return apiError(res, 404, stderr);
     res.writeHead(204); res.end();
   },
@@ -131,68 +136,79 @@ export const containers = {
   },
 
   // ── Logs ──────────────────────────────────────────────────────────────────
+  // apple/container logs supports only: --boot --follow -n <n> --debug
+  // (no --tail/--timestamps/--since/--until). Time filtering and timestamps
+  // are therefore applied client-side on the way out.
   async logs({ params, query, req, res }) {
     const args = ["logs", params.id];
-    if (query.follow === "1" || query.follow === "true") args.push("--follow");
-    if (query.tail && query.tail !== "all") args.push("--tail", query.tail);
+    const follow = query.follow === "1" || query.follow === "true";
+    if (follow) args.push("--follow");
+    if (query.tail && query.tail !== "all") args.push("-n", query.tail);
 
-    // ── Timestamps ────────────────────────────────────────────────────────
     const showTimestamps = query.timestamps === "1" || query.timestamps === "true";
-    if (showTimestamps) args.push("--timestamp");
+    const since = parseDockerTime(query.since);
+    const until = parseDockerTime(query.until);
 
-    // ── Since / Until (time-based filtering) ─────────────────────────────
-    if (query.since) {
-      args.push("--since", query.since);
-    }
-    if (query.until) {
-      args.push("--until", query.until);
-    }
-
-    // ── Stderr/Stdout filtering ─────────────────────────────────────────
     const showStdout = query.stdout !== "false" && query.stdout !== "0";
     const showStderr = query.stderr !== "false" && query.stderr !== "0";
     if (!showStdout && !showStderr) {
       return apiError(res, 400, "at least one of stdout or stderr must be enabled");
     }
-    if (!showStdout) args.push("--no-stdout");
-    if (!showStderr) args.push("--no-stderr");
 
     res.writeHead(200, { "Content-Type": "application/octet-stream" });
 
     const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
-
-    // ── DEDUP: Deduplicate log lines ─────────────────────────────────────
-    const seenLines = new Set();
-    let lastStdoutLine = "";
-    let lastStderrLine = "";
-
-    function processLine(stream, chunk) {
-      const text = chunk.toString();
-      const lines = text.split("\n");
-
-      for (const line of lines) {
-        if (!line) continue;
-
-        // Deduplicate consecutive identical lines
-        const lastLine = stream === 1 ? lastStdoutLine : lastStderrLine;
-        if (line === lastLine) continue;
-
-        if (stream === 1) lastStdoutLine = line;
-        else lastStderrLine = line;
-
-        res.write(frameLog(stream, Buffer.from(line + "\n")));
-      }
-    }
+    // Per-stream line processor: buffers partial lines (chunk boundaries
+    // split mid-line), drops consecutive duplicates, stamps + time-filters.
+    // ponytail: apple/container logs carry no timestamps, so we stamp with
+    // stream time — since/until filtering is exact for live lines only;
+    // historical lines all read as "now".
+    const processors = [];
+    const makeProcessor = (stream) => {
+      let pending = "";
+      let lastLine = null;
+      const emitLine = (line) => {
+        if (line === "") return;
+        if (line === lastLine) return; // consecutive dedup
+        lastLine = line;
+        let ts;
+        if (showTimestamps) {
+          ts = new Date().toISOString().slice(0, 19) + ".000000000Z";
+          const t = Date.parse(ts);
+          if (since !== null && t < since) return;
+          if (until !== null && t > until) return;
+        }
+        const payload = showTimestamps ? `${ts} ${line}\n` : `${line}\n`;
+        res.write(frameLog(stream, Buffer.from(payload)));
+      };
+      const onChunk = (chunk) => {
+        if (res.destroyed) return;
+        pending += chunk.toString();
+        const nl = pending.lastIndexOf("\n");
+        if (nl === -1) return;
+        const complete = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        for (const raw of complete.split("\n")) emitLine(raw.replace(/\r$/, ""));
+      };
+      const flush = () => { if (pending) { const rest = pending; pending = ""; emitLine(rest.replace(/\r$/, "")); } };
+      return { onChunk, flush };
+    };
 
     if (showStdout) {
-      child.stdout.on("data", (chunk) => processLine(1, chunk));
+      const p = makeProcessor(1);
+      processors.push(p);
+      child.stdout.on("data", p.onChunk);
     }
     if (showStderr) {
-      child.stderr.on("data", (chunk) => processLine(2, chunk));
+      const p = makeProcessor(2);
+      processors.push(p);
+      child.stderr.on("data", p.onChunk);
     }
 
-    child.on("close", () => res.end());
-    req.on("close", () => child.kill());
+    child.on("close", () => { for (const p of processors) p.flush(); if (!res.destroyed) res.end(); });
+    // res, not req: collectBody's for-await on req prevents req from emitting
+    // 'close' on client disconnect — res fires in every case.
+    res.on("close", () => child.kill());
   },
 
   // ── Top ───────────────────────────────────────────────────────────────────
@@ -214,7 +230,7 @@ export const containers = {
     child.on("close", () => {
       if (!res.destroyed) res.end();
     });
-    req.on("close", () => {
+    res.on("close", () => {
       child.kill();
       if (!res.destroyed) res.end();
     });
@@ -279,7 +295,7 @@ export const containers = {
         }
       });
 
-      req.on("close", () => {
+      res.on("close", () => {
         child.kill();
         if (!res.destroyed) res.end();
       });
@@ -339,6 +355,21 @@ function frameLog(stream, chunk) {
   header[0] = stream;
   header.writeUInt32BE(chunk.length, 4);
   return Buffer.concat([header, chunk]);
+}
+
+// ---------------------------------------------------------------------------
+// Parse Docker since/until query param: accepts Unix seconds (e.g. 1697055817,
+// possibly fractional) or RFC3339 (e.g. 2023-10-11T17:03:37Z). Returns ms
+// epoch, or null if absent/unparseable.
+// ---------------------------------------------------------------------------
+function parseDockerTime(value) {
+  if (!value) return null;
+  const s = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    return Date.parse(new Date(parseFloat(s) * 1000).toISOString());
+  }
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? null : t;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +437,8 @@ async function buildRunArgs(config, name, platform) {
   // Labels
   for (const [k, v] of Object.entries(config.Labels ?? {})) args.push("--label", `${k}=${v}`);
 
+  if (config.HostConfig?.AutoRemove) args.push("--rm");
+
   // Memory limit — apple/container --memory takes MiB (not bytes)
   const mem = config.HostConfig?.Memory;
   if (mem) args.push("--memory", String(Math.ceil(mem / 1048576)));
@@ -456,7 +489,7 @@ async function buildRunArgs(config, name, platform) {
 // ---------------------------------------------------------------------------
 // Shape translators: apple/container JSON → Docker API JSON
 // ---------------------------------------------------------------------------
-function toDockerContainer(c = {}) {
+export function toDockerContainer(c = {}) {
   // apple/container returns status as an object: {state, startedDate, networks}
   const cfg = c.configuration ?? {};
   const stateObj = typeof c.status === "object" ? c.status : {};
@@ -467,9 +500,21 @@ function toDockerContainer(c = {}) {
     ? Math.floor(new Date(cfg.creationDate).getTime() / 1000)
     : 0;
 
+  // apple/container is inconsistent about where it puts the real 64-hex id
+  // (top-level `id` vs `configuration.id`). Prefer the real id wherever it
+  // is, and take the display name from compose labels so Name/Id never
+  // swap between containers.
+  const labels = cfg.labels ?? c.labels ?? {};
+  const realId = c.id ?? c.ID ?? cfg.id ?? "";
+  // Prefer the compose service label (clean name) over the container label
+  // (project_service format from apple/container compose).
+  const name = labels["com.docker.compose.service"]
+    ?? labels["com.docker.compose.container"]
+    ?? cfg.name ?? c.name ?? c.Name ?? "";
+
   return {
-    Id: c.id ?? cfg.id ?? c.ID ?? "",
-    Names: [`/${cfg.id ?? c.name ?? c.Name ?? ""}`],
+    Id: realId,
+    Names: [name ? `/${name}` : realId],
     Image: cfg.image?.reference ?? c.image ?? c.Image ?? "",
     ImageID: cfg.image?.descriptor?.digest ?? c.imageID ?? "",
     Command: [cfg.initProcess?.executable, ...(cfg.initProcess?.arguments ?? [])]

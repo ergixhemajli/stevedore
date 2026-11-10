@@ -110,8 +110,8 @@ export const system = {
       stdio: ["ignore", "pipe", "ignore"],
     });
 
-    child.stdout.on("data", (chunk) => res.write(chunk));
-    req.on("close", () => child.kill());
-    child.on("close", () => res.end());
+    child.stdout.on("data", (chunk) => { if (!res.destroyed) res.write(chunk); });
+    res.on("close", () => child.kill());
+    child.on("close", () => { if (!res.destroyed) res.end(); });
   },
 };

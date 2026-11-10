@@ -15,6 +15,7 @@ Options:
 Container Commands:
   attach      Attach local standard input, output, and error streams to a running container
   commit      Create a new image from a container's changes
+  container   Manage containers (only "container prune" is supported)
   cp          Copy files/folders between a container and the local filesystem
   create      Create a new container
   diff        Inspect changes to files or directories on a container's filesystem
@@ -42,6 +43,7 @@ Container Commands:
 Image Commands:
   build       Build an image from a Dockerfile
   history     Show the history of an image
+  image       Manage images (only "image prune" is supported)
   images      List images
   import      Import the contents from a tarball to create a filesystem image
   load        Load an image from a tar archive or STDIN
@@ -63,7 +65,8 @@ System Commands:
   info        Display system-wide information
   login       Log in to a registry
   logout      Log out from a registry
-  system      Manage containers (mapped to container system)
+  prune       Remove unused data (shorthand for "system prune")
+  system      Manage the container system (df, prune [-a] [-f] [--volumes], events)
   version     Show the Docker version information
 
 Compose Commands:
