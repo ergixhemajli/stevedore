@@ -33,6 +33,16 @@ export function parseFilters(raw) {
   }
 }
 
+export function hasFilters(raw) {
+  if (!raw) return false;
+  try {
+    const filters = JSON.parse(raw);
+    return !filters || typeof filters !== "object" || Array.isArray(filters) || Object.keys(filters).length > 0;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Flatten parsed filter values into a match predicate.
  * The predicate receives an item and returns true if the item passes all filters.

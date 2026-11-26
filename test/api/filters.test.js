@@ -6,7 +6,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseFilters, matchesFilters } from "../../src/api/filters.js";
+import { parseFilters, matchesFilters, hasFilters } from "../../src/api/filters.js";
 
 describe("parseFilters", () => {
   it("parses label filter", () => {
@@ -41,6 +41,15 @@ describe("parseFilters", () => {
   it("returns {} for unparseable JSON", () => {
     assert.deepEqual(parseFilters("not json"), {});
     assert.deepEqual(parseFilters("{broken"), {});
+  });
+});
+
+describe("hasFilters", () => {
+  it("distinguishes empty filters from nonempty or invalid filters", () => {
+    assert.equal(hasFilters(undefined), false);
+    assert.equal(hasFilters("{}"), false);
+    assert.equal(hasFilters('{"label":[]}'), true);
+    assert.equal(hasFilters("not json"), true);
   });
 });
 

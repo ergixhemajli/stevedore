@@ -1,2 +1,2 @@
 import { makePassthrough } from "../utils/passthrough.js";
-export default makePassthrough("login");
+export default makePassthrough("registry login");

@@ -1,58 +1,47 @@
-/**
- * help.js — top-level help output that mirrors docker's style
- */
-
 export function printHelp() {
   console.log(`
-Usage:  stevedore [OPTIONS] COMMAND
+Usage:  docker [OPTIONS] COMMAND
 
-A docker-compatible CLI powered by apple/container (stevedore)
+A Docker Engine CLI compatibility layer powered by apple/container.
 
 Options:
       --help     Print usage
   -v, --version  Print version information
 
+Commands:
+  help          Print command-specific help
+
 Container Commands:
-  attach      Attach local standard input, output, and error streams to a running container
   commit      Create a new image from a container's changes
-  container   Manage containers (only "container prune" is supported)
+  container   Manage containers
   cp          Copy files/folders between a container and the local filesystem
   create      Create a new container
-  diff        Inspect changes to files or directories on a container's filesystem
-  doctor      Check if stevedore and apple/container are working properly
   exec        Run a command in a running container
   export      Export a container's filesystem as a tar archive
-  inspect     Display detailed information on one or more containers
+  inspect     Display detailed information about a container
   kill        Kill one or more running containers
   logs        Fetch the logs of a container
-  ls          List containers
-  pause       Pause all processes within one or more containers
-  port        List port mappings or a specific mapping for the container
-  rename      Rename a container
+  ls, ps      List containers
+  port        List published port mappings
   restart     Restart one or more containers
   rm          Remove one or more containers
   run         Run a command in a new container
   start       Start one or more stopped containers
-  stats       Display a live stream of container(s) resource usage statistics
+  stats       Display container resource usage
   stop        Stop one or more running containers
-  top         Display the running processes of a container
-  unpause     Unpause all processes within one or more containers
-  update      Update configuration of one or more containers
-  wait        Block until one or more containers stop, then print their exit codes
 
 Image Commands:
   build       Build an image from a Dockerfile
-  history     Show the history of an image
-  image       Manage images (only "image prune" is supported)
+  image       Manage images
   images      List images
-  import      Import the contents from a tarball to create a filesystem image
-  load        Load an image from a tar archive or STDIN
+  load        Load images from an archive
+  login       Log in to a registry
+  logout      Log out from a registry
   pull        Download an image from a registry
   push        Upload an image to a registry
   rmi         Remove one or more images
-  save        Save one or more images to a tar archive
-  search      Search Docker Hub for images
-  tag         Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE
+  save        Save one or more images to an archive
+  tag         Create a tag that refers to a source image
 
 Network Commands:
   network     Manage networks
@@ -61,32 +50,32 @@ Volume Commands:
   volume      Manage volumes
 
 System Commands:
-  events      Get real time events from the server
   info        Display system-wide information
-  login       Log in to a registry
-  logout      Log out from a registry
   prune       Remove unused data (shorthand for "system prune")
-  system      Manage the container system (df, prune [-a] [-f] [--volumes], events)
-  version     Show the Docker version information
+  system      Manage the container system (df, info, prune)
+  version     Show version information
 
 Compose Commands:
   compose     Run multi-container apps (proxied to docker-compose)
 
-Socket Commands:
-  socket      Manage the Docker API server (start/stop/status) — see docs for Testcontainers setup
-  env         Print shell exports (DOCKER_HOST/Testcontainers + DB Hikari defaults)
+Stevedore Commands:
+  completion  Print shell completion scripts
+  doctor      Check if stevedore and apple/container are working properly
+  env         Print shell exports (stevedore only)
+  socket      Manage the Docker API server for Testcontainers
 
-Run 'stevedore COMMAND --help' for more information on a command.
+Not implemented by Stevedore (many have no direct apple/container equivalent):
+  attach, diff, events, history, import, pause, rename, search, top, unpause,
+  update, wait, network connect/disconnect
 
-Note: stevedore is a compatibility layer. Some Docker flags are not supported
-by apple/container and will be ignored with a warning.
+Docker CLI extensions and orchestration commands such as buildx, contexts,
+Swarm, services, stacks, secrets, configs, and plugins are not implemented.
+The Docker socket API is a v1.44 compatibility subset; events, detailed system
+disk usage, container wait/top/attach/rename/pause/unpause/update, network
+connect/disconnect, and interactive exec stdin are unavailable.
 
-For Testcontainers support, start the API server with:
-  stevedore socket start
-
-For shell exports (including DB_HIKARI_*), run:
-  eval "$(stevedore env)"
-
-See https://github.com/stevedore for setup instructions.
+Some Docker flags are not supported by apple/container and may be dropped with
+an explicit warning. Commit metadata options are not supported. See the README
+for command-specific limitations.
 `);
 }

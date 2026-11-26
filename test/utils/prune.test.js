@@ -122,13 +122,14 @@ describe("prune via CLI", () => {
     assert.match(r.stderr, /--filter is not supported/);
   });
 
-  it("container/image groups only support prune", () => {
-    for (const group of ["container", "image"]) {
-      const r = docker([group, "ls"]);
-      assert.equal(r.status, 1);
-      assert.deepEqual(r.calls, []);
-      assert.match(r.stderr, new RegExp(`only "docker ${group} prune" is supported`));
-    }
+  it("container/image groups route supported subcommands", () => {
+    const containers = docker(["container", "ls"]);
+    assert.equal(containers.status, 0);
+    assert.deepEqual(containers.calls, ["list --format json"]);
+
+    const images = docker(["image", "ls"]);
+    assert.equal(images.status, 0);
+    assert.deepEqual(images.calls, ["image list"]);
   });
 
   it("top-level prune is a shorthand for system prune", () => {

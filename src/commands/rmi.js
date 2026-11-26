@@ -1,2 +1,2 @@
 import { makePassthrough } from "../utils/passthrough.js";
-export default makePassthrough("rmi");
+export default makePassthrough("image delete");

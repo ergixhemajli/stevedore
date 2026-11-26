@@ -5,9 +5,8 @@
  *
  * Parses arguments and dispatches to the command router.
  *
- * When invoked as "stevedore" (direct name), exposes all commands including
- * doctor and socket.  When invoked as "docker" (via symlink), only exposes
- * passthrough docker commands — doctor and socket are hidden.
+ * When invoked as "stevedore" (direct name), exposes all commands. When
+ * invoked as "docker" (via symlink), doctor and env are restricted.
  */
 
 import { dispatch } from "./dispatcher.js";
@@ -17,11 +16,11 @@ import path from "node:path";
 /**
  * Determine whether we were invoked under the name "stevedore".
  * We check the symlink name (basename) — if the symlink is named
- * "stevedore", we expose advanced commands (doctor, socket).
+ * "stevedore", doctor and env are available.
  */
 let invokedAsStevedore = false;
 try {
-  const symlinkTarget = fs.readlinkSync(process.argv[1]);
+  fs.readlinkSync(process.argv[1]);
   // If the symlink basename is "stevedore" we're running as stevedore
   invokedAsStevedore = path.basename(process.argv[1]) === "stevedore";
 } catch {

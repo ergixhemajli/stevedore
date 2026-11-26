@@ -7,7 +7,7 @@
  * This is what makes Testcontainers (and any other tool that speaks the
  * Docker socket API) work with apple/container.
  *
- * The Docker Engine API spec: https://docs.docker.com/engine/api/v1.41/
+ * The Docker Engine API compatibility target: v1.44.
  *
  * Architecture:
  *   Testcontainers
@@ -47,25 +47,32 @@ export const DEFAULT_SOCKET = process.env.STEVEDORE_SOCKET
  */
 export function createServer() {
   return http.createServer(async (req, res) => {
-    // Log method, URL only — never bodies (they contain env secrets).
     const start = Date.now();
-    const body = await collectBody(req);
-    console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.url} → ${res.statusCode ?? "?"} (${Date.now() - start}ms)`
-    );
-    if (DEBUG && body) {
-      console.log(`  body: ${JSON.stringify(body).slice(0, 500)}${JSON.stringify(body).length > 500 ? "..." : ""}`);
-    }
-
     try {
+      const body = shouldStreamBody(req) ? null : await collectBody(req);
+      console.log(
+        `[${new Date().toISOString()}] ${req.method} ${req.url} → ${res.statusCode ?? "?"} (${Date.now() - start}ms)`
+      );
+      if (DEBUG && body && typeof body === "object") {
+        console.log(`  body keys: ${Object.keys(body).join(", ")}`);
+      }
       await router(req, res, body);
     } catch (err) {
       if (!res.headersSent) {
-        res.writeHead(500, { "Content-Type": "application/json" });
+        res.writeHead(err.statusCode ?? 500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ message: err.message }));
       }
     }
   });
+}
+
+function shouldStreamBody(req) {
+  const contentType = String(req.headers["content-type"] ?? "").split(";")[0].toLowerCase();
+  if (contentType && !contentType.includes("json")) return true;
+
+  const pathname = (req.url?.split("?")[0] ?? "/").replace(/^\/v\d+\.\d+/, "");
+  return (req.method === "POST" && (pathname === "/build" || pathname === "/images/load")) ||
+    (req.method === "PUT" && /^\/containers\/[^/]+\/archive$/.test(pathname));
 }
 
 const MAX_BODY = 10 * 1024 * 1024; // 10 MiB

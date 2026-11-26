@@ -92,14 +92,25 @@ docker info
 
 ## Usage
 
-Stevedore maps the full `docker` CLI to `apple/container`. Most commands work directly:
+Stevedore maps Docker Engine CLI commands to `apple/container` where an equivalent exists. It is not a full Docker CLI; unsupported commands are listed below.
 
 | You type | stevedore runs |
 |---|---|
 | `docker run` | `container run` |
+| `docker stop` | `container stop` (Docker's 10-second default timeout) |
+| `docker restart` | `container stop` + `container start` |
+| `docker port` | reads the container's published port mappings |
+| `docker commit` | `container commit` |
 | `docker ps` | `container list` |
 | `docker images` | `container image list` |
+| `docker image inspect` | `container image inspect` |
 | `docker pull` | `container image pull` |
+| `docker push` | `container image push` |
+| `docker rmi` | `container image delete` |
+| `docker tag` | `container image tag` |
+| `docker save` | `container image save` |
+| `docker load` | `container image load` |
+| `docker login` / `logout` | `container registry login` / `logout` |
 | `docker build` | `container build` |
 | `docker exec` | `container exec` |
 | `docker logs` | `container logs` |
@@ -108,7 +119,7 @@ Stevedore maps the full `docker` CLI to `apple/container`. Most commands work di
 | `docker system prune [-a] [-f] [--volumes]` | `container prune` + `container network prune` + `container image prune [--all]` (+ `container volume prune` with `--volumes`) |
 | `docker container\|image\|volume\|network prune [-a] [-f]` | the matching `container ... prune` |
 
-Some docker flags are automatically translated (`--net` → `--network`) and unsupported ones are silently dropped with a warning, so your existing scripts keep working.
+`docker image <command>` and `docker container <command>` route to the matching top-level handlers when supported. `docker restart` is emulated with stop/start, and `docker port` reads Apple Container's published-port metadata. A bare `docker commit` gets a generated image reference because Apple Container requires one. Some Docker flags are translated (`--net` → `--network`); unsupported flags may be dropped with a warning.
 
 `prune` commands ask for confirmation like Docker does; `-f` skips the prompt. `docker prune` is a stevedore-only shorthand for `docker system prune` (real Docker has no top-level `prune`). `--filter` is not supported by apple/container, so it is refused instead of ignored (ignoring it would prune more than you asked for). Volume pruning removes every volume not used by a container, named ones included.
 
@@ -198,9 +209,18 @@ docker socket status
 
 ### Not yet supported
 
+These Docker Engine CLI commands are not implemented by Stevedore. Apple Container has no direct CLI equivalent for many of them; some would require a separate adapter:
+
+- `docker attach`, `docker diff`, `docker events`
+- `docker history`, `docker image history`, `docker import`, `docker image import`, `docker search`
+- `docker pause`, `docker unpause`, `docker rename`, `docker top`, `docker update`, `docker wait`
 - `docker network connect` / `disconnect`
-- `docker commit`, `docker diff`
-- `docker top`, `docker port`
+
+Docker CLI extensions and orchestration commands such as Buildx, contexts, Swarm, services, stacks, secrets, configs, and plugins are also outside Stevedore's scope. `docker inspect` defaults to containers; use `--type=image|network|volume` for other resource types. Docker's automatic resource detection is not replicated. `docker commit` options (`--author`, `--change`, `--message`, `--pause`) are not supported.
+
+### Docker socket API limitations
+
+The socket implements common container, image, network, volume, build, and auth operations for Testcontainers and Compose, but it is not the full Docker Engine API. It advertises API v1.44 (minimum v1.24). Docker events and detailed `/system/df` are unavailable; wait, top, attach, rename, pause/unpause, update, changes, network connect/disconnect, and interactive exec stdin are also unavailable. Prune filters are only partly supported, and image loading requires an OCI-compatible archive. Unmapped endpoints return 404.
 
 ## License
 

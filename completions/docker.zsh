@@ -82,9 +82,9 @@ _stevedore_list_volumes() {
 _stevedore_docker_complete() {
   local -a top_commands
   top_commands=(
-    attach build commit compose cp create diff doctor events exec export history images import info inspect
-    kill load login logout logs network pause port ps pull push rename restart rm rmi run save search socket
-    start stats stop system tag top unpause version volume wait completion
+    attach build commit compose container cp create diff doctor events exec export help history image images import info inspect
+    kill load login logout logs ls network pause port ps pull push rename restart rm rmi run save search socket
+    start stats stop system tag top unpause update version volume wait completion
   )
 
   if (( CURRENT == 2 )); then
@@ -115,6 +115,22 @@ _stevedore_docker_complete() {
       local -a images
       images=(${(f)"$(_stevedore_list_images)"})
       compadd -a images
+      return
+      ;;
+    container)
+      if (( CURRENT == 3 )); then
+        local -a container_sub
+        container_sub=(attach commit cp create diff exec export inspect kill logs ls pause prune port ps rename restart rm run start stats stop top unpause update wait)
+        compadd -a container_sub
+      fi
+      return
+      ;;
+    image)
+      if (( CURRENT == 3 )); then
+        local -a image_sub
+        image_sub=(build history import inspect load ls prune pull push rm save tag)
+        compadd -a image_sub
+      fi
       return
       ;;
     network)
@@ -152,7 +168,7 @@ _stevedore_docker_complete() {
     system)
       if (( CURRENT == 3 )); then
         local -a system_sub
-        system_sub=(df prune events)
+        system_sub=(df events info prune)
         compadd -a system_sub
         return
       fi

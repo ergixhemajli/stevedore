@@ -92,9 +92,9 @@ _stevedore_docker_complete() {
   fi
 
   local -a top_commands=(
-    attach build commit compose cp create diff doctor events exec export history images import info inspect
-    kill load login logout logs network pause port ps pull push rename restart rm rmi run save search socket
-    start stats stop system tag top unpause version volume wait completion
+    attach build commit compose container cp create diff doctor events exec export help history image images import info inspect
+    kill load login logout logs ls network pause port ps pull push rename restart rm rmi run save search socket
+    start stats stop system tag top unpause update version volume wait completion
   )
 
   if [[ $cword -eq 1 ]]; then
@@ -123,6 +123,18 @@ _stevedore_docker_complete() {
       COMPREPLY=( $(compgen -W "$( _stevedore_list_images )" -- "$cur") )
       return
       ;;
+    container)
+      if [[ $cword -eq 2 ]]; then
+        COMPREPLY=( $(compgen -W "attach commit cp create diff exec export inspect kill logs ls pause prune port ps rename restart rm run start stats stop top unpause update wait" -- "$cur") )
+      fi
+      return
+      ;;
+    image)
+      if [[ $cword -eq 2 ]]; then
+        COMPREPLY=( $(compgen -W "build history import inspect load ls prune pull push rm save tag" -- "$cur") )
+      fi
+      return
+      ;;
     network)
       if [[ $cword -eq 2 ]]; then
         COMPREPLY=( $(compgen -W "create inspect ls list rm remove prune" -- "$cur") )
@@ -149,7 +161,7 @@ _stevedore_docker_complete() {
       ;;
     system)
       if [[ $cword -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "df prune events" -- "$cur") )
+        COMPREPLY=( $(compgen -W "df events info prune" -- "$cur") )
         return
       fi
       ;;

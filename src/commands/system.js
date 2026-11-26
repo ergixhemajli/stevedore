@@ -1,17 +1,29 @@
-/**
- * commands/system.js
- * stevedore system <sub> → container system <sub>
- * Passes through: df, events. prune is handled by utils/prune.js.
- */
 import { exec } from "../utils/exec.js";
 import { translateFlags } from "../utils/flags.js";
 import { prune } from "../utils/prune.js";
-const MAP = { df: "df", prune: "prune", events: "logs --follow" };
-export default async function system(args) {
-  const [sub, ...rest] = args;
-  if (!sub) { await exec(["system", "--help"]); return; }
-  if (sub === "prune") { await prune("system", rest); return; }
-  if (sub === "df") { await exec(["system", "df", ...translateFlags(rest)]); return; }
-  if (sub === "events") { await exec(["system", "logs", "--follow", ...translateFlags(rest)]); return; }
-  await exec(["system", sub, ...translateFlags(rest)]);
+
+export default async function system([sub, ...rest]) {
+  if (!sub || sub === "--help" || sub === "-h") {
+    console.log("Usage: docker system <df|events|info|prune>");
+    return;
+  }
+
+  switch (sub) {
+    case "df":
+      await exec(["system", "df", ...translateFlags(rest)]);
+      return;
+    case "events":
+      console.error("stevedore: 'system events' is not supported by apple/container.");
+      process.exitCode = 1;
+      return;
+    case "info":
+      await exec(["system", "status", ...translateFlags(rest)]);
+      return;
+    case "prune":
+      await prune("system", rest);
+      return;
+    default:
+      console.error(`stevedore: unknown system subcommand: "${sub}"`);
+      process.exitCode = 1;
+  }
 }

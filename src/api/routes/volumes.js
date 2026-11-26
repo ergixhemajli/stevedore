@@ -1,8 +1,9 @@
 /**
  * src/api/routes/volumes.js
  */
-import { run, json, apiError } from "../run.js";
-import { parseFilters, matchesFilters } from "../filters.js";
+import { run, runJSON, json, apiError } from "../run.js";
+import { randomUUID } from "node:crypto";
+import { parseFilters, matchesFilters, hasFilters } from "../filters.js";
 
 export const volumes = {
   async list({ query, res }) {
@@ -17,26 +18,46 @@ export const volumes = {
     });
   },
   async create({ body, res }) {
-    const name = body?.Name ?? "";
-    const args = ["volume", "create", ...(name ? [name] : [])];
+    const name = body?.Name || randomUUID();
+    if (body?.Driver && body.Driver !== "local") {
+      return apiError(res, 501, `volume driver ${body.Driver} is not supported by apple/container`);
+    }
+    const args = ["volume", "create"];
+    for (const [key, value] of Object.entries(body?.Labels ?? {})) args.push("--label", `${key}=${value}`);
+    for (const [key, value] of Object.entries(body?.DriverOpts ?? {})) args.push("--opt", `${key}=${value}`);
+    if (name) args.push(name);
     const { stdout, stderr, exitCode } = await run(args);
     if (exitCode !== 0) return apiError(res, 500, stderr);
-    json(res, 201, toDockerVolume({ name: stdout.trim() || name }));
+    json(res, 201, toDockerVolume({ name: stdout.trim() || name, labels: body?.Labels ?? {} }));
   },
   async inspect({ params, res }) {
-    const { stdout, stderr, exitCode } = await run(["volume", "inspect", params.name, "--format", "json"]);
+    const { stdout, exitCode } = await run(["volume", "inspect", params.name]);
     if (exitCode !== 0) return apiError(res, 404, `No such volume: ${params.name}`);
-    try { json(res, 200, toDockerVolume(JSON.parse(stdout))); }
-    catch { apiError(res, 500, "parse error"); }
+    try {
+      const parsed = JSON.parse(stdout);
+      json(res, 200, toDockerVolume(Array.isArray(parsed) ? parsed[0] : parsed));
+    } catch { apiError(res, 500, "parse error"); }
   },
   async remove({ params, res }) {
     const { stderr, exitCode } = await run(["volume", "delete", params.name]);
     if (exitCode !== 0) return apiError(res, 404, stderr);
     res.writeHead(204); res.end();
   },
-  async prune({ res }) {
-    await run(["volume", "prune"]);
-    json(res, 200, { VolumesDeleted: [], SpaceReclaimed: 0 });
+  async prune({ query, res }) {
+    if (hasFilters(query.filters)) return apiError(res, 501, "volume prune filters are not supported by apple/container");
+    const before = await runJSON(["volume", "list"]);
+    const beforeDf = await runJSON(["system", "df"]).catch(() => null);
+    const result = await run(["volume", "prune"]);
+    if (result.exitCode !== 0) return apiError(res, 500, result.stderr);
+    const after = await runJSON(["volume", "list"]);
+    const afterDf = await runJSON(["system", "df"]).catch(() => null);
+    const remaining = new Set((Array.isArray(after) ? after : after ? [after] : []).map((volume) => volume.name ?? volume.Name));
+    const removed = (Array.isArray(before) ? before : before ? [before] : [])
+      .map((volume) => volume.name ?? volume.Name)
+      .filter((name) => name && !remaining.has(name));
+    const beforeSize = Number(beforeDf?.volumes?.sizeInBytes) || 0;
+    const afterSize = Number(afterDf?.volumes?.sizeInBytes) || 0;
+    json(res, 200, { VolumesDeleted: removed, SpaceReclaimed: Math.max(0, beforeSize - afterSize) });
   },
 };
 

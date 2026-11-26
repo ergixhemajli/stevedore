@@ -1,8 +1,8 @@
 /**
  * src/api/routes/networks.js
  */
-import { run, json, apiError } from "../run.js";
-import { parseFilters, matchesFilters } from "../filters.js";
+import { run, runJSON, json, apiError } from "../run.js";
+import { parseFilters, matchesFilters, hasFilters } from "../filters.js";
 
 export const networks = {
   async list({ query, res }) {
@@ -17,47 +17,56 @@ export const networks = {
   },
   async create({ body, res }) {
     if (!body?.Name) return apiError(res, 400, "Name required");
+    if (body.Driver && body.Driver !== "bridge") {
+      return apiError(res, 501, `network driver ${body.Driver} is not supported by apple/container`);
+    }
+    if (body.Attachable || body.Ingress) return apiError(res, 501, "attachable and ingress networks are not supported by apple/container");
 
     const args = ["network", "create"];
-
-    // Docker compose relies on network labels such as:
-    // - com.docker.compose.project
-    // - com.docker.compose.network
-    // Preserve them so compose can detect ownership correctly.
-    for (const [k, v] of Object.entries(body.Labels ?? {})) {
-      args.push("--label", `${k}=${v}`);
-    }
-
+    for (const [key, value] of Object.entries(body.Labels ?? {})) args.push("--label", `${key}=${value}`);
     if (body.Internal === true) args.push("--internal");
+    for (const [key, value] of Object.entries(body.Options ?? {})) args.push("--option", `${key}=${value}`);
 
-    // Map network options to apple/container's --option key=value
-    for (const [k, v] of Object.entries(body.Options ?? {})) {
-      args.push("--option", `${k}=${v}`);
+    for (const config of body.IPAM?.Config ?? []) {
+      if (config.Gateway) return apiError(res, 501, "custom network gateways are not supported by apple/container");
+      if (config.Subnet) args.push(config.Subnet.includes(":") ? "--subnet-v6" : "--subnet", config.Subnet);
     }
-
-    // Driver is not directly compatible with apple/container plugin naming.
-    // Compose commonly sends "bridge"; ignore driver hints for compatibility.
 
     args.push(body.Name);
-
     const { stdout, stderr, exitCode } = await run(args);
     if (exitCode !== 0) return apiError(res, 500, stderr);
     json(res, 201, { Id: stdout.trim() || body.Name, Warning: "" });
   },
+  async connect({ res }) {
+    apiError(res, 501, "network connect is not supported by apple/container");
+  },
+  async disconnect({ res }) {
+    apiError(res, 501, "network disconnect is not supported by apple/container");
+  },
   async inspect({ params, res }) {
-    const { stdout, stderr, exitCode } = await run(["network", "inspect", params.id]);
+    const { stdout, exitCode } = await run(["network", "inspect", params.id]);
     if (exitCode !== 0) return apiError(res, 404, `No such network: ${params.id}`);
-    try { json(res, 200, toDockerNetwork(JSON.parse(stdout)[0])); }
-    catch { apiError(res, 500, "parse error"); }
+    try {
+      const parsed = JSON.parse(stdout);
+      json(res, 200, toDockerNetwork(Array.isArray(parsed) ? parsed[0] : parsed));
+    } catch { apiError(res, 500, "parse error"); }
   },
   async remove({ params, res }) {
     const { stderr, exitCode } = await run(["network", "delete", params.id]);
     if (exitCode !== 0) return apiError(res, 404, stderr);
     res.writeHead(204); res.end();
   },
-  async prune({ res }) {
-    await run(["network", "prune"]);
-    json(res, 200, { NetworksDeleted: [] });
+  async prune({ query, res }) {
+    if (hasFilters(query.filters)) return apiError(res, 501, "network prune filters are not supported by apple/container");
+    const before = await runJSON(["network", "list"]);
+    const result = await run(["network", "prune"]);
+    if (result.exitCode !== 0) return apiError(res, 500, result.stderr);
+    const after = await runJSON(["network", "list"]);
+    const remaining = new Set((Array.isArray(after) ? after : after ? [after] : []).map((network) => network.id ?? network.ID));
+    const removed = (Array.isArray(before) ? before : before ? [before] : [])
+      .map((network) => network.id ?? network.ID)
+      .filter((id) => id && !remaining.has(id));
+    json(res, 200, { NetworksDeleted: removed });
   },
 };
 

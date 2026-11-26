@@ -1,2 +1,2 @@
 import { makePassthrough } from "../utils/passthrough.js";
-export default makePassthrough("save");
+export default makePassthrough("image save");

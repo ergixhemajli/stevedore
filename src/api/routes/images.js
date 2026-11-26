@@ -1,17 +1,21 @@
 /**
  * src/api/routes/images.js
  */
-import { run, json, apiError } from "../run.js";
+import { run, runJSON, json, apiError } from "../run.js";
 import { spawn } from "node:child_process";
+import { createWriteStream, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { CONTAINER_BIN } from "../../utils/exec.js";
-
-import { parseFilters, matchesFilters } from "../filters.js";
+import { authenticate } from "./system.js";
+import { parseFilters, matchesFilters, hasFilters } from "../filters.js";
 
 export const images = {
 
   async list({ query, res }) {
     const args = ["image", "list", "--format", "json"];
-    if (query.all === "1") args.push("--all");
+    if (query.all === "1" || query.all === "true") args.push("--all");
     const { stdout, stderr, exitCode } = await run(args);
     if (exitCode !== 0) return apiError(res, 500, stderr);
     const parsed = parseLines(stdout);
@@ -22,7 +26,7 @@ export const images = {
     );
   },
 
-  async pull({ query, req, res }) {
+  async pull({ query, res }) {
     const rawImage = query.fromImage;
     const tag = query.tag;
 
@@ -39,12 +43,11 @@ export const images = {
     //   image@sha256:abc → pass through (digest reference)
     let ref = rawImage;
     if (!ref.includes("/") && !ref.startsWith("@")) {
-      // Short name: add docker.io/library prefix
       ref = `docker.io/library/${ref}`;
     }
-    if (!ref.includes("@") && !ref.includes(":")) {
-      // No tag or digest → default to latest
-      ref = `${ref}:latest`;
+    const lastComponent = ref.slice(ref.lastIndexOf("/") + 1);
+    if (!ref.includes("@") && !lastComponent.includes(":")) {
+      ref = `${ref}:${tag || "latest"}`;
     }
     if (!ref) return apiError(res, 400, "fromImage query parameter required");
 
@@ -116,30 +119,145 @@ export const images = {
   },
 
   async inspect({ params, res }) {
-    const { stdout, stderr, exitCode } = await run(["image", "inspect", params.name]);
+    const { stdout, exitCode } = await run(["image", "inspect", params.name]);
     if (exitCode !== 0) return apiError(res, 404, `No such image: ${params.name}`);
-    try { json(res, 200, toDockerImageInspect(JSON.parse(stdout)[0])); }
-    catch { apiError(res, 500, "Failed to parse inspect output"); }
+    try {
+      const parsed = JSON.parse(stdout);
+      json(res, 200, toDockerImageInspect(Array.isArray(parsed) ? parsed[0] : parsed));
+    } catch { apiError(res, 500, "Failed to parse inspect output"); }
+  },
+
+  async load({ req, res }) {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "stevedore-image-load-"));
+    const archive = path.join(tempDir, "image.tar");
+    try {
+      await pipeline(req, createWriteStream(archive));
+      const { stdout, stderr, exitCode } = await run(["image", "load", "--input", archive]);
+      if (exitCode !== 0) return apiError(res, 500, stderr);
+      const lines = stdout ? stdout.split(/\r?\n/).filter(Boolean) : [];
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(lines.map((line) => JSON.stringify({ stream: `${line}\n` })).join("\n") + (lines.length ? "\n" : ""));
+    } catch (error) {
+      apiError(res, 500, error.message);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  },
+
+  async save({ params, query, res }) {
+    const references = params.name
+      ? [params.name]
+      : String(query.names ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+    if (!references.length) return apiError(res, 400, "image name required");
+    const check = await run(["image", "inspect", ...references]);
+    if (check.exitCode !== 0) return apiError(res, 404, check.stderr);
+
+    res.writeHead(200, { "Content-Type": "application/x-tar" });
+    const child = spawn(CONTAINER_BIN, ["image", "save", ...references], { stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.pipe(res);
+    child.on("close", (code) => {
+      if (res.destroyed) return;
+      if (code !== 0) return res.destroy(new Error("image save failed"));
+      res.end();
+    });
+    child.on("error", (error) => { if (!res.destroyed) res.destroy(error); });
+    res.on("close", () => child.kill());
+  },
+
+  async push({ params, query, req, res }) {
+    const header = req.headers?.["x-registry-auth"];
+    if (header) {
+      let auth;
+      try { auth = JSON.parse(Buffer.from(header, "base64").toString("utf8")); }
+      catch { return apiError(res, 400, "invalid X-Registry-Auth header"); }
+      if (Object.keys(auth ?? {}).length) {
+        const login = await authenticate(auth);
+        if (login.error) return apiError(res, login.error.includes("not supported") ? 501 : 401, login.error);
+      }
+    }
+
+    const name = params.name;
+    const lastComponent = name.slice(name.lastIndexOf("/") + 1);
+    const reference = query.tag && !lastComponent.includes(":") && !name.includes("@") ? `${name}:${query.tag}` : name;
+    const args = ["image", "push", reference];
+    if (query.platform) args.push("--platform", query.platform);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const emit = (chunk) => {
+      for (const line of chunk.toString().split(/\r?\n/)) {
+        if (line.trim()) res.write(JSON.stringify({ status: line.trim() }) + "\n");
+      }
+    };
+    child.stdout.on("data", emit);
+    child.stderr.on("data", emit);
+    child.on("close", (code) => {
+      if (res.destroyed) return;
+      if (code !== 0) res.write(JSON.stringify({ error: `push failed with exit code ${code}` }) + "\n");
+      else res.write(JSON.stringify({ status: `Pushed image ${reference}` }) + "\n");
+      res.end();
+    });
+    child.on("error", (error) => {
+      if (!res.destroyed) {
+        res.write(JSON.stringify({ error: error.message }) + "\n");
+        res.end();
+      }
+    });
+    res.on("close", () => child.kill());
+  },
+
+  async prune({ query, res }) {
+    const filters = parseFilters(query.filters);
+    if (query.filters && hasFilters(query.filters) && Object.keys(filters).length === 0) {
+      return apiError(res, 400, "invalid filters JSON");
+    }
+    const entries = Object.entries(filters);
+    if (entries.some(([key]) => key !== "dangling")) {
+      return apiError(res, 501, "image prune filter is not supported by apple/container");
+    }
+    if (filters.dangling && (filters.dangling.length !== 1 || !["true", "false"].includes(filters.dangling[0]))) {
+      return apiError(res, 400, "invalid dangling filter");
+    }
+    const all = filters.dangling?.[0] === "false";
+    const before = toArray(await runJSON(["image", "list"]));
+    const beforeDf = await runJSON(["system", "df"]).catch(() => null);
+    const result = await run(["image", "prune", ...(all ? ["--all"] : [])]);
+    if (result.exitCode !== 0) return apiError(res, 500, result.stderr);
+    const after = toArray(await runJSON(["image", "list"]));
+    const afterDf = await runJSON(["system", "df"]).catch(() => null);
+    const remaining = new Set(after.map((image) => image.id ?? image.ID));
+    const deleted = before.filter((image) => !remaining.has(image.id ?? image.ID));
+    const ImagesDeleted = deleted.flatMap((image) => [
+      ...(image.tags ?? []).map((tag) => ({ Untagged: tag })),
+      { Deleted: image.id ?? image.ID },
+    ]);
+    const beforeSize = Number(beforeDf?.images?.sizeInBytes) || 0;
+    const afterSize = Number(afterDf?.images?.sizeInBytes) || 0;
+    const SpaceReclaimed = Math.max(0, beforeSize - afterSize);
+    json(res, 200, { ImagesDeleted, SpaceReclaimed });
   },
 
   async remove({ params, query, res }) {
     const args = ["image", "delete", params.name];
-    if (query.force === "1") args.push("--force");
+    if (query.force === "1" || query.force === "true") args.push("--force");
     const { stderr, exitCode } = await run(args);
     if (exitCode !== 0) return apiError(res, 404, stderr);
     json(res, 200, [{ Untagged: params.name }]);
   },
 
   async tag({ params, query, res }) {
+    if (!query.repo) return apiError(res, 400, "repo query parameter required");
     const target = query.repo + (query.tag ? `:${query.tag}` : "");
     const { stderr, exitCode } = await run(["image", "tag", params.name, target]);
     if (exitCode !== 0) return apiError(res, 500, stderr);
     res.writeHead(201); res.end();
   },
 
-  async history({ params, res }) {
-    // apple/container doesn't have image history — return empty
-    json(res, 200, []);
+  async history({ res }) {
+    apiError(res, 501, "image history is not supported by apple/container");
+  },
+
+  async search({ res }) {
+    apiError(res, 501, "registry search is not supported by apple/container");
   },
 
   async build({ req, query, res }) {
@@ -157,6 +275,10 @@ export const images = {
     });
   },
 };
+
+function toArray(value) {
+  return Array.isArray(value) ? value : value ? [value] : [];
+}
 
 function toDockerImage(i) {
   return {

@@ -22,9 +22,13 @@ import { CONTAINER_BIN } from "../utils/exec.js";
 const activeChildren = new Set();
 const childTimers = new Set();
 
-export async function run(args, { timeoutMs } = {}) {
+export async function run(args, { timeoutMs, input } = {}) {
   return new Promise((resolve) => {
     const child = spawn(CONTAINER_BIN, args);
+    if (input !== undefined) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(input);
+    }
     const out = [];
     const err = [];
     activeChildren.add(child);

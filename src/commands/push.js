@@ -1,2 +1,2 @@
 import { makePassthrough } from "../utils/passthrough.js";
-export default makePassthrough("push");
+export default makePassthrough("image push");

@@ -47,4 +47,27 @@ describe("containers.create", () => {
     assert.ok(!(await create({ Image: "alpine", HostConfig: { AutoRemove: false } })).args.includes("--rm"));
     assert.ok(!(await create({ Image: "alpine" })).args.includes("--rm"));
   });
+
+  it("maps supported mounts and CPU limits and warns for unsupported fields", async () => {
+    const { res, args } = await create({
+      Image: "alpine",
+      Hostname: "custom-host",
+      HostConfig: {
+        Mounts: [{ Type: "bind", Source: "/host/data", Target: "/data", ReadOnly: true }],
+        CpuQuota: 50000,
+        CpuPeriod: 100000,
+        ExtraHosts: ["database:127.0.0.1"],
+      },
+    });
+    assert.equal(res.status, 201);
+    assert.ok(args.includes("--mount"));
+    assert.ok(args.includes("type=bind,target=/data,source=/host/data,readonly"));
+    assert.ok(args.includes("--cpus"));
+    assert.ok(args.includes("0.5"));
+    assert.ok(!args.includes("--add-host"));
+    assert.deepEqual(JSON.parse(res.body).Warnings, [
+      "Hostname is not supported by apple/container",
+      "ExtraHosts is not supported by apple/container",
+    ]);
+  });
 });

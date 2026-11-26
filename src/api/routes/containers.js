@@ -20,9 +20,56 @@ import { run, runJSON, json, apiError } from "../run.js";
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { CONTAINER_BIN } from "../../utils/exec.js";
-import { parseFilters, matchesFilters } from "../filters.js";
+import { parseFilters, matchesFilters, hasFilters } from "../filters.js";
 
 export const containers = {
+
+  async commit({ query, body, res }) {
+    const id = query.container;
+    if (!id) return apiError(res, 400, "container query parameter required");
+    if (query.changes || body?.Changes?.length || body?.Config) {
+      return apiError(res, 501, "commit metadata changes are not supported by apple/container");
+    }
+
+    const inspected = await run(["inspect", id]);
+    if (inspected.exitCode !== 0) return apiError(res, 404, `No such container: ${id}`);
+    let state;
+    try {
+      const parsed = JSON.parse(inspected.stdout);
+      state = (Array.isArray(parsed) ? parsed[0] : parsed)?.status?.state;
+    } catch { return apiError(res, 500, "Failed to parse container state"); }
+    if (!((state === "stopped" || state === "created") || query.pause === "0" || query.pause === "false")) {
+      return apiError(res, 501, "apple/container cannot pause a running container during commit; stop it first or set pause=false");
+    }
+
+    const reference = query.repo
+      ? `${query.repo}${query.tag ? `:${query.tag}` : ""}`
+      : `stevedore/commit-${Date.now()}`;
+    const result = await run(["commit", id, reference]);
+    if (result.exitCode !== 0) return apiError(res, 500, result.stderr);
+    json(res, 201, {
+      Id: result.stdout.trim() || reference,
+      Warnings: query.repo ? [] : ["apple/container requires a reference; Stevedore generated one"],
+    });
+  },
+
+  async prune({ query, res }) {
+    if (hasFilters(query.filters)) return apiError(res, 501, "container prune filters are not supported by apple/container");
+    const before = toArray(await runJSON(["list", "--all"]));
+    const beforeDf = await runJSON(["system", "df"]).catch(() => null);
+    const { stderr, exitCode } = await run(["prune"]);
+    if (exitCode !== 0) return apiError(res, 500, stderr);
+    const after = toArray(await runJSON(["list", "--all"]));
+    const afterDf = await runJSON(["system", "df"]).catch(() => null);
+    const remaining = new Set(after.map((item) => item.id ?? item.configuration?.id));
+    const removed = before
+      .filter((item) => item.status?.state !== "running")
+      .map((item) => item.id ?? item.configuration?.id)
+      .filter((id) => id && !remaining.has(id));
+    const beforeSize = Number(beforeDf?.containers?.sizeInBytes) || 0;
+    const afterSize = Number(afterDf?.containers?.sizeInBytes) || 0;
+    json(res, 200, { ContainersDeleted: removed, SpaceReclaimed: Math.max(0, beforeSize - afterSize) });
+  },
 
   // ── List ──────────────────────────────────────────────────────────────────
   async list({ query, res }) {
@@ -53,7 +100,7 @@ export const containers = {
       else if (process.arch === "x64") platform = "linux/amd64";
     }
 
-    const args = await buildRunArgs({ ...body, Image: image }, query.name, platform);
+    const { args, warnings } = await buildRunArgs({ ...body, Image: image }, query.name, platform);
 
     // Use 'container create' (not 'run') so the container is NOT started yet.
     // This gives Testcontainers time to configure its resource reaper (Ryuk)
@@ -64,12 +111,12 @@ export const containers = {
     if (exitCode !== 0) return apiError(res, 500, stderr || stdout);
 
     const id = stdout.trim().split("\n").pop();
-    json(res, 201, { Id: id, Warnings: [] });
+    json(res, 201, { Id: id, Warnings: warnings });
   },
 
   // ── Inspect ───────────────────────────────────────────────────────────────
   async inspect({ params, res }) {
-    const { stdout, stderr, exitCode } = await run(["inspect", params.id]);
+    const { stdout, exitCode } = await run(["inspect", params.id]);
     if (exitCode !== 0) return apiError(res, 404, `No such container: ${params.id}`);
     try {
       const parsed = JSON.parse(stdout);
@@ -89,8 +136,7 @@ export const containers = {
 
   // ── Stop ──────────────────────────────────────────────────────────────────
   async stop({ params, query, res }) {
-    const args = ["stop", params.id];
-    if (query.t) args.push("--time", query.t);
+    const args = ["stop", params.id, "--time", query.t ?? "10"];
     // ponytail: fixed 60s server-side cap — `--time` is enforced by
     // apple/container itself, but a hung VM would otherwise hang the
     // client's HTTP request indefinitely.
@@ -109,12 +155,13 @@ export const containers = {
   },
 
   // ── Restart ───────────────────────────────────────────────────────────────
-  async restart({ params, res }) {
-    bumpRestartCount(params.id);
-    const stop = await run(["stop", params.id], { timeoutMs: 60_000 });
+  async restart({ params, query, res }) {
+    const stopArgs = ["stop", params.id, "--time", query.t ?? "10"];
+    const stop = await run(stopArgs, { timeoutMs: 60_000 });
     if (stop.exitCode !== 0) return apiError(res, 404, stop.stderr);
     const { stderr, exitCode } = await run(["start", params.id], { timeoutMs: 60_000 });
     if (exitCode !== 0) return apiError(res, 404, stderr);
+    bumpRestartCount(params.id);
     res.writeHead(204); res.end();
   },
 
@@ -127,19 +174,39 @@ export const containers = {
     res.writeHead(204); res.end();
   },
 
-  // ── Rename ────────────────────────────────────────────────────────────────
-  // apple/container does not support renaming containers (internal ID is immutable).
-  // Return 204 as a no-op. Compose will keep the internal suffixed IDs
-  // (e.g. atlas-db_atlas-db) but won't crash on recreate.
-  async rename({ params, query, res }) {
-    res.writeHead(204); res.end();
+  async rename({ res }) {
+    apiError(res, 501, "container rename is not supported by apple/container");
+  },
+
+  async attach({ res }) {
+    apiError(res, 501, "container attach is not supported by apple/container");
+  },
+
+  async pause({ res }) {
+    apiError(res, 501, "container pause is not supported by apple/container");
+  },
+
+  async unpause({ res }) {
+    apiError(res, 501, "container unpause is not supported by apple/container");
+  },
+
+  async update({ res }) {
+    apiError(res, 501, "container update is not supported by apple/container");
+  },
+
+  async changes({ res }) {
+    apiError(res, 501, "container filesystem changes are not supported by apple/container");
+  },
+
+  async resize({ res }) {
+    apiError(res, 501, "container terminal resize is not supported by apple/container");
   },
 
   // ── Logs ──────────────────────────────────────────────────────────────────
   // apple/container logs supports only: --boot --follow -n <n> --debug
   // (no --tail/--timestamps/--since/--until). Time filtering and timestamps
   // are therefore applied client-side on the way out.
-  async logs({ params, query, req, res }) {
+  async logs({ params, query, res }) {
     const args = ["logs", params.id];
     const follow = query.follow === "1" || query.follow === "true";
     if (follow) args.push("--follow");
@@ -211,14 +278,23 @@ export const containers = {
     res.on("close", () => child.kill());
   },
 
-  // ── Top ───────────────────────────────────────────────────────────────────
-  async top({ params, res }) {
-    // apple/container doesn't support top; return a minimal response
-    json(res, 200, { Titles: ["PID", "USER", "TIME", "COMMAND"], Processes: [] });
+  async top({ res }) {
+    apiError(res, 501, "container top is not supported by apple/container");
+  },
+
+  async export({ params, res }) {
+    const check = await run(["inspect", params.id]);
+    if (check.exitCode !== 0) return apiError(res, 404, `No such container: ${params.id}`);
+
+    res.writeHead(200, { "Content-Type": "application/x-tar" });
+    const child = spawn(CONTAINER_BIN, ["export", params.id], { stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.pipe(res);
+    child.on("close", () => { if (!res.destroyed) res.end(); });
+    res.on("close", () => child.kill());
   },
 
   // ── Stats ─────────────────────────────────────────────────────────────────
-  async stats({ params, query, req, res }) {
+  async stats({ params, query, res }) {
     const args = ["stats", params.id, "--format", "json"];
     if (!(query.stream === "0" || query.stream === "false")) args.push("--follow");
 
@@ -236,14 +312,37 @@ export const containers = {
     });
   },
 
-  // ── Wait ──────────────────────────────────────────────────────────────────
-  async wait({ params, res }) {
-    const { stdout, exitCode } = await run(["wait", params.id]);
-    const code = parseInt(stdout.trim(), 10) || 0;
-    json(res, 200, { StatusCode: code });
+  async wait({ res }) {
+    apiError(res, 501, "container wait is not supported by apple/container");
   },
 
   // ── Exec create ───────────────────────────────────────────────────────────
+  async execInspect({ params, res }) {
+    const stored = execStore.get(params.id);
+    const result = execResults.get(params.id);
+    const state = stored ?? result;
+    if (!state) return apiError(res, 404, `No such exec: ${params.id}`);
+    const config = state.config ?? {};
+    const cmd = Array.isArray(config.Cmd) ? config.Cmd : [];
+    json(res, 200, {
+      ID: params.id,
+      Running: Boolean(stored?.running),
+      ExitCode: result?.exitCode ?? null,
+      ProcessConfig: {
+        privileged: Boolean(config.Privileged),
+        user: config.User ?? "",
+        tty: Boolean(config.Tty),
+        entrypoint: cmd[0] ?? "",
+        arguments: cmd.slice(1),
+      },
+      OpenStdin: Boolean(config.AttachStdin),
+      OpenStdout: config.AttachStdout !== false,
+      OpenStderr: config.AttachStderr !== false,
+      CanRemove: false,
+      ContainerID: state.containerId,
+    });
+  },
+
   async execCreate({ params, body, res }) {
     // Store the exec config keyed by a generated ID.
     // Real Docker has a separate exec API; we fake the ID and run at execStart.
@@ -253,55 +352,50 @@ export const containers = {
   },
 
   // ── Exec start ────────────────────────────────────────────────────────────
-  async execStart({ params, body, req, res }) {
+  async execStart({ params, body, res }) {
     const stored = execStore.get(params.id);
     if (!stored) return apiError(res, 404, `No such exec: ${params.id}`);
 
     const { containerId, config } = stored;
-    const cmd = config?.Cmd ?? [];
-    const args = ["exec", containerId, ...cmd];
-
+    if (config?.AttachStdin) return apiError(res, 501, "interactive exec stdin is not supported by apple/container");
+    const tty = body?.Tty ?? config?.Tty ?? false;
+    const args = ["exec", ...(body?.Detach ? ["--detach"] : []), ...(tty ? ["--tty"] : [])];
+    for (const value of config?.Env ?? []) args.push("--env", value);
+    if (config?.User) args.push("--user", config.User);
+    if (config?.WorkingDir) args.push("--workdir", config.WorkingDir);
+    args.push(containerId, ...(config?.Cmd ?? []));
     if (body?.Detach) {
       const { stderr, exitCode } = await run(args);
+      execStore.delete(params.id);
+      execResults.set(params.id, { ...stored, exitCode });
       if (exitCode !== 0) return apiError(res, 500, stderr);
       res.writeHead(204); res.end();
-    } else {
-      // Attach mode — stream output and input (interactive exec)
-      res.writeHead(200, { "Content-Type": "application/octet-stream" });
-      const child = spawn(CONTAINER_BIN, args, { stdio: ["pipe", "pipe", "pipe"] });
+      return;
+    }
 
-      // Forward stdin to child
-      req.on("data", (chunk) => {
-        if (!child.stdin.destroyed) child.stdin.write(chunk);
-      });
-      req.on("end", () => {
-        if (!child.stdin.destroyed) child.stdin.end();
-      });
-
-      // Forward stdout/stderr to response
+    execStore.set(params.id, { ...stored, running: true });
+    res.writeHead(200, { "Content-Type": "application/octet-stream" });
+    const child = spawn(CONTAINER_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
+    if (config?.AttachStdout !== false) {
       child.stdout.on("data", (chunk) => {
-        if (!res.destroyed) res.write(frameLog(1, chunk));
+        if (!res.destroyed) res.write(tty ? chunk : frameLog(1, chunk));
       });
+    }
+    if (config?.AttachStderr !== false && !tty) {
       child.stderr.on("data", (chunk) => {
         if (!res.destroyed) res.write(frameLog(2, chunk));
       });
-
-      child.on("close", (code) => {
-        if (!res.destroyed) res.end();
-        // Return exit code for non-detached exec
-        if (code !== undefined && code !== 0) {
-          // Write exit code as a final frame
-          res.write(frameLog(1, Buffer.from(`\nContainer exited with code ${code}\n`)));
-        }
-      });
-
-      res.on("close", () => {
-        child.kill();
-        if (!res.destroyed) res.end();
-      });
     }
-
-    execStore.delete(params.id);
+    child.on("close", (code) => {
+      execStore.delete(params.id);
+      execResults.set(params.id, { ...stored, exitCode: code ?? 0 });
+      if (!res.destroyed) res.end();
+    });
+    child.on("error", () => {
+      execStore.delete(params.id);
+      if (!res.destroyed) res.end();
+    });
+    res.on("close", () => child.kill());
   },
 
   // ── Archive (cp) ──────────────────────────────────────────────────────────
@@ -345,6 +439,7 @@ function getRestartCount(containerId) {
 // In-memory exec store (exec ID → { containerId, config })
 // ---------------------------------------------------------------------------
 const execStore = new Map();
+const execResults = new Map();
 
 // ---------------------------------------------------------------------------
 // Docker multiplexed log frame
@@ -376,114 +471,107 @@ function parseDockerTime(value) {
 // Flag builder: Docker ContainerConfig → container run args
 // ---------------------------------------------------------------------------
 async function buildRunArgs(config, name, platform) {
+  const host = config.HostConfig ?? {};
   const args = ["run", "--detach"];
+  const warnings = [];
 
   if (platform) args.push("--platform", platform);
   if (name) args.push("--name", name);
+  if (host.OpenStdin) args.push("--interactive");
+  if (config.Tty) args.push("--tty");
+  for (const value of config.Env ?? []) args.push("--env", value);
 
-  // Environment
-  for (const e of config.Env ?? []) args.push("--env", e);
-
-  // Port bindings
-  const bindings = config.HostConfig?.PortBindings ?? {};
-  for (const [containerPort, hostBindings] of Object.entries(bindings)) {
-    const cPort = containerPort.split("/")[0];
-    for (const hb of hostBindings ?? []) {
-      const hostPortRaw = hb.HostPort;
-      let hostPort = typeof hostPortRaw === "string" ? hostPortRaw.trim() : "";
-      const hostIp = hb.HostIp || "";
-
-      // Docker semantics: empty HostPort means "assign a random host port".
-      // apple/container requires an explicit host port, so we allocate one.
-      if (!hostPort) {
-        hostPort = String(await findFreePort());
-      }
-
-      // apple/container currently behaves inconsistently with loopback-only
-      // publish bindings coming from Docker API (e.g. 127.0.0.1:10101:5432),
-      // where the port can appear open but not forward traffic.
-      // For compatibility, treat loopback HostIp as unspecified.
-      const normalizedHostIp = ["127.0.0.1", "localhost", "::1"].includes(hostIp)
-        ? ""
-        : hostIp;
-
-      const bind = normalizedHostIp
-        ? `${normalizedHostIp}:${hostPort}:${cPort}`
-        : `${hostPort}:${cPort}`;
-      args.push("--publish", bind);
+  for (const [containerPort, hostBindings] of Object.entries(host.PortBindings ?? {})) {
+    const [cPort, protocol = "tcp"] = containerPort.split("/");
+    const destination = protocol === "tcp" ? cPort : `${cPort}/${protocol}`;
+    for (const binding of hostBindings ?? []) {
+      let hostPort = typeof binding.HostPort === "string" ? binding.HostPort.trim() : "";
+      const hostIp = binding.HostIp || "";
+      if (!hostPort) hostPort = String(await findFreePort());
+      const normalizedHostIp = ["127.0.0.1", "localhost", "::1"].includes(hostIp) ? "" : hostIp;
+      const host = normalizedHostIp.includes(":") && !normalizedHostIp.startsWith("[")
+        ? `[${normalizedHostIp}]`
+        : normalizedHostIp;
+      args.push("--publish", host ? `${host}:${hostPort}:${destination}` : `${hostPort}:${destination}`);
     }
   }
 
-  // Volume mounts (Binds = legacy named volumes)
-  for (const mount of config.HostConfig?.Binds ?? []) args.push("--volume", mount);
-
-  // Additional mounts (HostConfig.Mounts) — skip host/path if app doesn't set them
-  // (apple/container may not support this yet)
-
-  // Extra hosts
-  for (const host of config.HostConfig?.ExtraHosts ?? []) {
-    args.push("--add-host", host);
+  for (const bind of host.Binds ?? []) args.push("--volume", bind);
+  for (const mount of host.Mounts ?? []) {
+    const type = String(mount.Type ?? "").toLowerCase();
+    const target = mount.Target ?? mount.Destination;
+    if (!target || !["bind", "volume", "tmpfs"].includes(type)) {
+      warnings.push(`mount type ${type || "unknown"} is not supported by apple/container`);
+      continue;
+    }
+    if (type === "tmpfs") {
+      const size = mount.TmpfsOptions?.SizeBytes;
+      args.push("--tmpfs", `${target}${size ? `:size=${Math.ceil(size / 1048576)}m` : ""}`);
+      continue;
+    }
+    const source = mount.Source ?? mount.Name;
+    const parts = [`type=${type}`, `target=${target}`];
+    if (source) parts.push(`source=${source}`);
+    if (mount.ReadOnly) parts.push("readonly");
+    args.push("--mount", parts.join(","));
+  }
+  for (const [target, options] of Object.entries(host.Tmpfs ?? {})) {
+    args.push("--tmpfs", `${target}${options ? `:${options}` : ""}`);
   }
 
-  // Tmpfs mounts
-  for (const [dest, opts] of Object.entries(config.HostConfig?.Tmpfs ?? {})) {
-    args.push("--tmpfs", `${dest}${opts ? ":" + opts : ""}`);
+  for (const dns of host.Dns ?? []) args.push("--dns", dns);
+  for (const option of host.DnsOptions ?? []) args.push("--dns-option", option);
+  for (const search of host.DnsSearch ?? []) args.push("--dns-search", search);
+  if (host.DnsDomain) args.push("--dns-domain", host.DnsDomain);
+  for (const capability of host.CapAdd ?? []) args.push("--cap-add", capability);
+  for (const capability of host.CapDrop ?? []) args.push("--cap-drop", capability);
+  for (const limit of host.Ulimits ?? []) {
+    args.push("--ulimit", `${limit.Name}=${limit.Soft}${limit.Hard !== undefined ? `:${limit.Hard}` : ""}`);
   }
 
-  // Network
-  const network = config.HostConfig?.NetworkMode;
+  const network = host.NetworkMode;
   if (network && network !== "default") args.push("--network", network);
+  for (const [key, value] of Object.entries(config.Labels ?? {})) args.push("--label", `${key}=${value}`);
+  if (host.AutoRemove) args.push("--rm");
+  if (host.Init) args.push("--init");
+  if (host.ReadonlyRootfs) args.push("--read-only");
 
-  // Labels
-  for (const [k, v] of Object.entries(config.Labels ?? {})) args.push("--label", `${k}=${v}`);
+  const memory = host.Memory;
+  if (memory) args.push("--memory", String(Math.ceil(memory / 1048576)));
+  const cpuCount = host.NanoCpus
+    ? host.NanoCpus / 1e9
+    : host.CpuQuota && host.CpuPeriod
+      ? host.CpuQuota / host.CpuPeriod
+      : 0;
+  if (cpuCount) args.push("--cpus", String(cpuCount));
+  if (host.ShmSize) args.push("--shm-size", `${Math.ceil(host.ShmSize / 1048576)}M`);
 
-  if (config.HostConfig?.AutoRemove) args.push("--rm");
-
-  // Memory limit — apple/container --memory takes MiB (not bytes)
-  const mem = config.HostConfig?.Memory;
-  if (mem) args.push("--memory", String(Math.ceil(mem / 1048576)));
-
-  // CPU quota — NanoCpus → --cpus (float)
-  const cpus = config.HostConfig?.NanoCpus;
-  if (cpus) args.push("--cpus", String(cpus / 1e9));
-
-  // CpuQuota / CpuPeriod → --cpu-quota (apple/container may not support both)
-  if (config.HostConfig?.CpuQuota && config.HostConfig?.CpuPeriod) {
-    args.push("--cpu-quota", String(config.HostConfig.CpuQuota));
-    args.push("--cpu-period", String(config.HostConfig.CpuPeriod));
+  for (const [field, value] of [
+    ["Hostname", config.Hostname],
+    ["ExtraHosts", host.ExtraHosts],
+    ["Privileged", host.Privileged],
+    ["Devices", host.Devices],
+    ["RestartPolicy", host.RestartPolicy?.Name && host.RestartPolicy.Name !== "no"],
+    ["SecurityOpt", host.SecurityOpt],
+    ["Sysctls", host.Sysctls],
+    ["CpuShares", host.CpuShares],
+    ["Healthcheck", config.Healthcheck],
+  ]) {
+    if (Array.isArray(value) ? value.length : value && typeof value === "object" ? Object.keys(value).length : value) {
+      warnings.push(`${field} is not supported by apple/container`);
+    }
   }
 
-  // Hostname
-  if (config.Hostname) args.push("--hostname", config.Hostname);
-
-  // Working directory
   if (config.WorkingDir) args.push("--workdir", config.WorkingDir);
-
-  // User
   if (config.User) args.push("--user", config.User);
-
-  // Image
   args.push(config.Image);
 
-  // Entrypoint + Cmd — apple/container --entrypoint takes only the executable;
-  // the rest of the entrypoint + Cmd are treated as positional args.
-  const entrypoint = config.Entrypoint ?? [];
-  const cmd = config.Cmd ?? [];
+  const entrypoint = Array.isArray(config.Entrypoint) ? config.Entrypoint : config.Entrypoint ? [config.Entrypoint] : [];
+  const command = Array.isArray(config.Cmd) ? config.Cmd : config.Cmd ? [config.Cmd] : [];
+  if (entrypoint.length) args.push("--entrypoint", entrypoint[0], ...entrypoint.slice(1));
+  args.push(...command);
 
-  if (entrypoint.length) {
-    args.push("--entrypoint", entrypoint[0]);
-    if (entrypoint.length > 1) {
-      args.push(...entrypoint.slice(1));
-    }
-    if (cmd.length) {
-      args.push(...cmd);
-    }
-  } else {
-    // No entrypoint: Cmd is the command to run.
-    if (cmd.length) args.push(...cmd);
-  }
-
-  return args;
+  return { args, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +724,10 @@ async function findFreePort() {
       });
     });
   });
+}
+
+function toArray(value) {
+  return Array.isArray(value) ? value : value ? [value] : [];
 }
 
 function parseLines(stdout) {

@@ -15,11 +15,10 @@
  *   3. Add tests in test/commands/<name>.test.js
  *
  * Access control:
- *   - doctor, socket: only available when invoked as "stevedore" (not "docker")
+ *   - doctor, env: only available when invoked as "stevedore" (not "docker")
  *   - all other commands: available under both names
  */
 
-import { exec } from "./utils/exec.js";
 import { printHelp } from "./utils/help.js";
 
 // ---------------------------------------------------------------------------
@@ -44,11 +43,13 @@ const COMMAND_MAP = {
   rename:      () => import("./commands/rename.js"),
   pause:       () => import("./commands/pause.js"),
   unpause:     () => import("./commands/unpause.js"),
+  update:      () => import("./commands/update.js"),
   supervisor:  () => import("./commands/supervisor.js"),
   container:   () => import("./commands/container.js"),
 
   // ── container inspection ─────────────────────────────────────────────────
   ps:      () => import("./commands/ps.js"),
+  ls:      () => import("./commands/ps.js"),
   inspect: () => import("./commands/inspect.js"),
   logs:    () => import("./commands/logs.js"),
   stats:   () => import("./commands/stats.js"),
@@ -87,7 +88,8 @@ const COMMAND_MAP = {
   logout:  () => import("./commands/logout.js"),
 
   // ── compose (project orchestration) ──────────────────────────────────────
-  compose: () => import("./commands/compose.js"),
+  compose:    () => import("./commands/compose.js"),
+  completion: () => import("./commands/completion.js"),
 
   // ── system / info ────────────────────────────────────────────────────────
   info:    () => import("./commands/info.js"),
@@ -106,6 +108,14 @@ export async function dispatch(argv, invokedAsStevedore = false) {
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
     printHelp();
     return;
+  }
+
+  if (subcommand === "help") {
+    if (rest.length === 0) {
+      printHelp();
+      return;
+    }
+    return dispatch([...rest, "--help"], invokedAsStevedore);
   }
 
   if (subcommand === "--version" || subcommand === "-v") {
